@@ -8,12 +8,13 @@
 
 Downloads anime from Crunchyroll and outputs them in a MKV file.
 
-This fork starts from upstream **1.6.0** (`182ea1b`) and adds Windows sign-in
-using the account/password already stored by **Crunchyroll Video Analyzer
-(CVA)** in the operating-system keyring. Build this fork to use the integration;
+This fork starts from upstream **1.6.0** (`182ea1b`) and reads the account/password
+already stored by **Crunchyroll Video Analyzer (CVA)** through its platform-aware
+credential store. Windows browser sign-in uses those stored credentials. Build
+this fork to use the integration;
 the upstream release downloads above do not contain it.
 
-## CVA keyring sign-in
+## CVA stored credentials
 
 On Windows, omit `--etp-rt` to use CVA sign-in automatically. This requires:
 
@@ -24,15 +25,69 @@ On Windows, omit `--etp-rt` to use CVA sign-in automatically. This requires:
 - Credentials previously added through CVA's credential manager, under the same
   Windows user running the downloader.
 
-The fork imports CVA's existing `KeyringCredentialStore` and hosted browser SSO
-flow. The shared keyring service is `Crunchyroll Video Analyzer/Crunchyroll`,
-with `account` and `password` slots. The downloader only reads those entries;
-manage or update them through CVA.
+The fork calls CVA's `select_credential_store()` and
+`default_credential_store(selection=...)` directly. It uses the same detection,
+configuration, and storage implementation as CVA, without a separate password
+setup. The Windows keyring service remains
+`Crunchyroll Video Analyzer/Crunchyroll`, with `account` and `password` slots.
+Manage or update credentials through CVA; the downloader never calls the
+store's `set()` or `delete()` methods.
 
 CVA is discovered in a sibling folder named `Crunchyroll Video Analyzer`, or
 through `--cva-root` / `CRUNCHYROLL_CVA_ROOT`. Select its Python executable with
-`--cva-python` / `CRUNCHYROLL_CVA_PYTHON`; otherwise `python` on PATH is used.
+`--cva-python` / `CRUNCHYROLL_CVA_PYTHON`; otherwise `python` on PATH is used
+on Windows and `python3` (falling back to `python`) on other systems.
 Explicit flags take precedence over environment settings.
+
+### Credential check and Unraid/container storage
+
+`--credentials-check` verifies that the selected store returns a complete
+credential pair and exits without opening Chrome, contacting Crunchyroll, or
+displaying the account/password. It needs no URL, FFmpeg, or media files. It
+checks stored-credential readability, not whether Crunchyroll accepts them.
+Use it separately from `--auth-check`, `--etp-rt`, `--url`, and `--file`.
+
+```powershell
+.\crunchyroll-downloader.exe --credentials-check --cva-root "..\Crunchyroll Video Analyzer"
+```
+
+CVA's automatic selection uses the OS keyring on ordinary Windows/POSIX desktops.
+`CVA_CONTAINER=true` (also `1` or `yes`), `/.dockerenv`, or `/run/.containerenv`
+selects the encrypted container vault. The explicit
+`CVA_CREDENTIAL_BACKEND=os-keyring` or `container-vault` override takes precedence;
+`auto` is the default. Invalid settings fail with an error.
+
+For Unraid/Docker, expose the same CVA vault and unlock-key files to the downloader
+and run it as the same dedicated effective UID. Keep the vault directory private
+(`0700`), the vault and its sibling lock file `0600`, and the key `0400` or `0600`.
+The vault directory must permit access to the sibling lock even when only
+reading credentials; the key can be mounted read-only. The key contains exactly
+32 raw bytes provisioned through CVA's documented setup. Do not put credentials
+or key bytes in these environment settings; their values are paths only.
+
+Example inside a prepared Linux environment (a Docker image is not required):
+
+```sh
+export CRUNCHYROLL_CVA_ROOT=/opt/cva
+export CVA_CONTAINER=true
+export CVA_CREDENTIAL_VAULT_PATH=/var/lib/cva/credentials.vault
+export CVA_CREDENTIAL_KEY_PATH=/run/secrets/cva-credential-vault-key
+./crunchyroll-downloader --credentials-check --cva-python /opt/cva-venv/bin/python
+```
+
+Those vault/key paths are CVA's defaults; change them to match the paths visible
+inside your environment. Install the updated CVA's declared Python dependencies,
+including `cryptography==50.0.2`, in the chosen interpreter. The authoritative
+storage/unlock contract is `docs/CONTAINER_CREDENTIAL_VAULT.md` in your CVA folder.
+Missing credentials, locked keys, corrupt vaults, unavailable storage, and invalid
+configuration produce distinct sanitized errors; there is no plaintext fallback.
+
+**Credential selection and vault reads work on Linux. Browser sign-in through
+CVA still requires Windows.** This change does not provide a Linux Chrome
+lifecycle or a Docker application image. Downloads on Linux/macOS retain the
+original `--etp-rt` authentication option until that browser work is implemented.
+
+### Windows browser sign-in
 
 Check sign-in without downloading anything (FFmpeg and Widevine files are not
 needed for this check):
@@ -50,8 +105,8 @@ Then use the same command without `--auth-check`, adding your download options:
 The downloader uses its own persistent profile and runtime state under
 `%LOCALAPPDATA%\Crunchyroll Downloader`, separate from CVA's profile. Each token
 acquisition starts and closes its owned Chrome runtime. Existing session state
-is tried first; keyring is consulted only when normal first-party sign-in is
-needed. The account/password stay in Python memory and the OS keyring. Only a
+is tried first; credentials are read only when normal first-party sign-in is
+needed. The account/password stay in Python memory and the selected store. Only a
 short-lived bearer reaches Go through a private process pipe; no credentials or
 tokens are written to downloader configuration or logs. Browser session cookies
 remain in the dedicated browser profile. Initial sign-in and token refresh use
@@ -63,12 +118,17 @@ use the original `--etp-rt` option for that run. An explicit nonempty `--etp-rt`
 always selects the original cookie flow and does not require CVA or Python.
 Linux and macOS retain that original cookie flow.
 
-The bridge depends on CVA's internal Python APIs. Offline compatibility was
-checked against the local CVA revision `18cc783`; CVA updates may require
-corresponding adapter changes. Tests use fake credentials and local HTTP servers.
+The bridge depends on CVA's internal Python APIs, including its completed
+platform selector, factory, and container vault. Use the updated CVA working
+copy containing those APIs; the older `18cc783` committed snapshot alone does not
+contain them. Tests use fake credentials and local HTTP servers.
 On 2026-10-22, the built Windows executable also passed a live `--auth-check`
 using the existing keyring credentials and its separate Chrome profile. That
 check performed no media download; it does not validate the download pipeline.
+The platform-aware update was also tested on Windows and native Ubuntu WSL with
+CVA's pinned dependencies, including a compiled Linux downloader reading a
+temporary CVA-created encrypted vault. These checks used only synthetic
+credentials and do not claim a deployed Unraid/Docker application test.
 
 ## Features
 
@@ -104,8 +164,10 @@ Usage of ./crunchyroll-downloader:
         Audio quality (default "192k")
   -cc-lang string
         Closed caption language(s), comma-separated (e.g. "en-US,ALL"). Add ALL for every available caption; downloaded in addition to --subs-lang
+  -credentials-check
+        Check readability of CVA's selected credential store without signing in (no URL required)
   -cva-python string
-        Python executable with CVA dependencies (default: CRUNCHYROLL_CVA_PYTHON or python)
+        Python executable with CVA dependencies (default: CRUNCHYROLL_CVA_PYTHON, then python on Windows or python3 elsewhere)
   -cva-root string
         Crunchyroll Video Analyzer folder (default: sibling folder or CRUNCHYROLL_CVA_ROOT)
   -debug-manifest
@@ -187,7 +249,11 @@ python -B -m unittest discover -s tests -v
 For offline compatibility checks against your installed CVA, set `CVA_TEST_ROOT`
 to that folder before running the Python tests. These checks import its classes
 with fake browser/keyring implementations and never access the real credential
-store. The CI Go suite also runs with the race detector.
+store. On Linux, they also create a disposable encrypted vault through CVA and
+read it through the downloader, checking locked/corrupt/permission failures.
+Set `CRDL_TEST_BINARY` to an absolute Linux downloader executable path to include
+the complete CLI-to-Python vault-read check. The CI Go suite also runs with the
+race detector.
 
 ## Help
 

@@ -19,9 +19,19 @@ class BridgeError(Exception):
 
 def load_cva(root):
     sys.path.insert(0, str(root))
+    # Select credentials before importing any Windows browser/runtime modules.
+    # CVA is the single authority for overrides and container-marker detection.
+    from crunchyroll_video_analyzer.credential_store import (
+        CredentialRuntimeKind, CredentialStorageCorrupt,
+        CredentialStorageLocked, CredentialStorageUnavailable,
+        default_credential_store, select_credential_store,
+    )
+    return SimpleNamespace(**locals())
+
+
+def load_browser_api():
     from crunchyroll_video_analyzer.browser_runtime import bind_launcher_runtime_to_cdp
     from crunchyroll_video_analyzer.configuration_source import SourceBoundConfigurationAcquirer
-    from crunchyroll_video_analyzer.credential_store import KeyringCredentialStore
     from crunchyroll_video_analyzer.launcher import LauncherRuntimeSession
     from crunchyroll_video_analyzer.sso import (
         BrowserSsoProvider, DirectCdpAccountFlow, FirstPartyHostedSsoDriver,
@@ -34,7 +44,39 @@ def load_cva(root):
     return SimpleNamespace(**locals())
 
 
-def acquire_token(api, source_url, application_root):
+def selected_credential_store(api):
+    try:
+        selection = api.select_credential_store()
+    except ValueError:
+        raise BridgeError("credential_config") from None
+    try:
+        store = api.default_credential_store(selection=selection)
+    except ValueError:
+        raise BridgeError("credential_config") from None
+    except api.CredentialStorageUnavailable:
+        raise BridgeError("credential_unavailable") from None
+    except Exception:
+        raise BridgeError("credential_store") from None
+    return selection, store
+
+
+def read_credentials(api, store):
+    try:
+        pair = store.get()
+    except api.CredentialStorageLocked:
+        raise BridgeError("credential_locked") from None
+    except api.CredentialStorageCorrupt:
+        raise BridgeError("credential_corrupt") from None
+    except api.CredentialStorageUnavailable:
+        raise BridgeError("credential_unavailable") from None
+    except Exception:
+        raise BridgeError("credential_store") from None
+    if pair is None:
+        raise BridgeError("credentials_missing")
+    return pair
+
+
+def acquire_token(api, source_url, application_root, credential_lookup):
     identity = api.parse_crunchyroll_resource(source_url)
     if identity is None:
         raise BridgeError("source")
@@ -50,15 +92,6 @@ def acquire_token(api, source_url, application_root):
         lifecycle = api.create_windows_chrome_lifecycle(contract, application_root)
         lifecycle.mutex_name = r"Local\CrunchyrollDownloader.Launcher.Runtime"
         return lifecycle
-
-    def credentials():
-        try:
-            pair = api.KeyringCredentialStore().get()
-        except Exception:
-            raise BridgeError("credential_store") from None
-        if pair is None:
-            raise BridgeError("credentials_missing")
-        return pair
 
     session = api.LauncherRuntimeSession(lifecycle_factory)
     try:
@@ -78,7 +111,7 @@ def acquire_token(api, source_url, application_root):
         provider = api.BrowserSsoProvider(
             api.DirectCdpAccountFlow(connect_owned_page, api.FirstPartyHostedSsoDriver(configuration)),
             profile_path=profile, application_data_root=application_root,
-            credential_lookup=credentials,
+            credential_lookup=credential_lookup,
         )
         try:
             return provider.get_token()
@@ -96,15 +129,36 @@ def run(root, request):
     except Exception:
         return {"status": "dependencies"}
     try:
+        operation = request.get("operation", "token")
+        if operation not in {"token", "credentials-check"}:
+            raise BridgeError("protocol")
         source_url = request.get("source_url")
-        if not isinstance(source_url, str) or not source_url:
+        if operation == "token" and (not isinstance(source_url, str) or not source_url):
             raise BridgeError("source")
+        selection, store = selected_credential_store(api)
+        if operation == "credentials-check":
+            # Confirm decryption/readability, but never serialize the pair.
+            read_credentials(api, store)
+            return {
+                "status": "credentials_ok",
+                "runtime": selection.runtime.value,
+                "backend": selection.store.value,
+            }
+        if selection.runtime is not api.CredentialRuntimeKind.WINDOWS_DESKTOP:
+            raise BridgeError("browser_runtime_unsupported")
         local_app_data = os.environ.get("LOCALAPPDATA")
-        if not local_app_data or os.name != "nt":
+        if not local_app_data:
             raise BridgeError("runtime")
-        # Share only CVA's keyring namespace, never its profile or runtime state.
+        try:
+            browser_api = load_browser_api()
+        except Exception:
+            raise BridgeError("dependencies") from None
+        # Share CVA's selected credential store, never its profile/runtime state.
         application_root = Path(local_app_data) / "Crunchyroll Downloader"
-        token = acquire_token(api, source_url, application_root)
+        token = acquire_token(
+            browser_api, source_url, application_root,
+            lambda: read_credentials(api, store),
+        )
         return {"status": "ok", "access_token": token}
     except BridgeError as error:
         return {"status": error.status}

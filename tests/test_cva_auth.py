@@ -1,11 +1,15 @@
 """Offline tests: never open Chrome, the network, or the real credential store."""
 
 import contextlib
+from enum import Enum
 import importlib.util
 import io
 import os
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -21,10 +25,44 @@ class Interaction(Exception):
         self.state = SimpleNamespace(value=state)
 
 
+class Unavailable(Exception):
+    pass
+
+
+class Locked(Unavailable):
+    pass
+
+
+class Corrupt(Exception):
+    pass
+
+
+class RuntimeKind(Enum):
+    WINDOWS_DESKTOP = "windows_desktop"
+    CONTAINER = "container"
+    POSIX_DESKTOP = "posix_desktop"
+
+
+def credential_api(store, runtime=RuntimeKind.WINDOWS_DESKTOP):
+    selection = SimpleNamespace(
+        runtime=runtime,
+        store=SimpleNamespace(value="container_vault" if runtime is RuntimeKind.CONTAINER else "os_keyring"),
+    )
+    return SimpleNamespace(
+        select_credential_store=Mock(return_value=selection),
+        default_credential_store=Mock(return_value=store),
+        CredentialRuntimeKind=RuntimeKind,
+        CredentialStorageUnavailable=Unavailable,
+        CredentialStorageLocked=Locked,
+        CredentialStorageCorrupt=Corrupt,
+    )
+
+
 class BridgeTests(unittest.TestCase):
     def setUp(self):
         self.store = Mock()
         self.store.get.return_value = SimpleNamespace(account="fixture-account", password="fixture-secret")
+        self.credential_api = credential_api(self.store)
         self.browser = Mock()
         self.browser.connect_page.side_effect = lambda **kwargs: contextlib.nullcontext(Mock())
         self.session = Mock()
@@ -39,7 +77,6 @@ class BridgeTests(unittest.TestCase):
             LauncherRuntimeSession=Mock(return_value=self.session),
             bind_launcher_runtime_to_cdp=Mock(return_value=self.browser),
             SourceBoundConfigurationAcquirer=Mock(return_value=Mock()),
-            KeyringCredentialStore=Mock(return_value=self.store),
             FirstPartyHostedSsoDriver=Mock(),
             DirectCdpAccountFlow=Mock(),
             BrowserSsoProvider=Mock(return_value=self.provider),
@@ -48,11 +85,14 @@ class BridgeTests(unittest.TestCase):
         self.application_root = Path("fixture-app-data") / "Crunchyroll Downloader"
 
     def acquire(self):
-        return bridge.acquire_token(self.api, "https://www.crunchyroll.com/series/FIXTURE", self.application_root)
+        return bridge.acquire_token(
+            self.api, "https://www.crunchyroll.com/series/FIXTURE", self.application_root,
+            lambda: bridge.read_credentials(self.credential_api, self.store),
+        )
 
     def test_session_reuse_is_lazy_and_isolated(self):
         self.assertEqual(self.acquire(), "fixture-token")
-        self.api.KeyringCredentialStore.assert_not_called()
+        self.store.get.assert_not_called()
         options = self.api.BrowserSsoProvider.call_args.kwargs
         self.assertEqual(options["profile_path"], self.application_root / "Browser Profile")
         self.assertEqual(options["application_data_root"], self.application_root)
@@ -95,7 +135,7 @@ class BridgeTests(unittest.TestCase):
             self.acquire()
         self.assertEqual(caught.exception.status, "configuration")
         self.session.close.assert_called_once()
-        self.api.KeyringCredentialStore.assert_not_called()
+        self.store.get.assert_not_called()
         self.session.reset_mock()
         self.session.start.side_effect = RuntimeError("fixture-secret")
         with self.assertRaises(RuntimeError):
@@ -123,11 +163,159 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(bridge.run(ROOT, {}), {"status": "dependencies"})
 
 
+class CredentialSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.store = Mock()
+        self.store.get.return_value = SimpleNamespace(account="fixture-account", password="fixture-secret")
+        self.api = credential_api(self.store)
+
+    def run_bridge(self, request):
+        with patch.object(bridge, "load_cva", return_value=self.api):
+            return bridge.run(ROOT, request)
+
+    def test_each_platform_uses_cva_selection_and_factory_without_browser(self):
+        for runtime in RuntimeKind:
+            with self.subTest(runtime=runtime.value):
+                self.store.reset_mock()
+                self.api = credential_api(self.store, runtime)
+                with patch.object(bridge, "load_browser_api", side_effect=AssertionError("browser must not load")):
+                    result = self.run_bridge({"operation": "credentials-check"})
+                self.assertEqual(result, {
+                    "status": "credentials_ok", "runtime": runtime.value,
+                    "backend": self.api.select_credential_store.return_value.store.value,
+                })
+                self.api.select_credential_store.assert_called_once_with()
+                self.api.default_credential_store.assert_called_once_with(
+                    selection=self.api.select_credential_store.return_value,
+                )
+                self.store.get.assert_called_once_with()
+                self.store.set.assert_not_called()
+                self.store.delete.assert_not_called()
+
+    def test_bad_selection_and_bad_paths_fail_without_read(self):
+        for method in ["select_credential_store", "default_credential_store"]:
+            with self.subTest(method=method):
+                self.api = credential_api(self.store)
+                getattr(self.api, method).side_effect = ValueError("fixture-secret")
+                self.assertEqual(self.run_bridge({"operation": "credentials-check"}), {"status": "credential_config"})
+                self.store.get.assert_not_called()
+
+    def test_missing_locked_corrupt_and_unavailable_stores_are_distinct(self):
+        for error, status in [
+            (None, "credentials_missing"),
+            (Locked("fixture-secret"), "credential_locked"),
+            (Corrupt("fixture-secret"), "credential_corrupt"),
+            (Unavailable("fixture-secret"), "credential_unavailable"),
+            (RuntimeError("fixture-secret"), "credential_store"),
+        ]:
+            with self.subTest(status=status):
+                self.store.get.return_value = None
+                self.store.get.side_effect = error
+                self.assertEqual(self.run_bridge({"operation": "credentials-check"}), {"status": status})
+                self.store.set.assert_not_called()
+                self.store.delete.assert_not_called()
+
+    def test_windows_sign_in_defers_selected_store_read_until_needed(self):
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(ROOT / ".tools" / "fake-appdata")}), \
+                patch.object(bridge, "load_browser_api", return_value=object()), \
+                patch.object(bridge, "acquire_token", return_value="fixture-token") as acquire:
+            self.assertEqual(self.run_bridge({"source_url": "https://www.crunchyroll.com/series/FIXTURE"}), {"status": "ok", "access_token": "fixture-token"})
+        self.store.get.assert_not_called()
+        self.assertIs(acquire.call_args.args[3](), self.store.get.return_value)
+        self.store.get.assert_called_once_with()
+
+    def test_container_token_attempt_does_not_load_windows_runtime_or_read_secrets(self):
+        self.api = credential_api(self.store, RuntimeKind.CONTAINER)
+        with patch.object(bridge, "load_browser_api") as load_browser:
+            result = self.run_bridge({"source_url": "https://www.crunchyroll.com/series/FIXTURE"})
+        self.assertEqual(result, {"status": "browser_runtime_unsupported"})
+        load_browser.assert_not_called()
+        self.store.get.assert_not_called()
+
+    def test_invalid_operation_never_constructs_store(self):
+        self.assertEqual(self.run_bridge({"operation": "export-secret"}), {"status": "protocol"})
+        self.api.default_credential_store.assert_not_called()
+
+
 @unittest.skipUnless(os.environ.get("CVA_TEST_ROOT"), "set CVA_TEST_ROOT for local CVA API compatibility tests")
 class LocalCVAContractTests(unittest.TestCase):
+    def test_actual_detection_and_factory_forwarding(self):
+        api = bridge.load_cva(Path(os.environ["CVA_TEST_ROOT"]))
+        actual_selector = api.select_credential_store
+        for environment, os_name, marker, runtime, store in [
+            ({}, "nt", None, "windows_desktop", "os_keyring"),
+            ({}, "posix", None, "posix_desktop", "os_keyring"),
+            ({}, "posix", "/.dockerenv", "container", "container_vault"),
+            ({}, "posix", "/run/.containerenv", "container", "container_vault"),
+            ({"CVA_CONTAINER": "yes"}, "posix", None, "container", "container_vault"),
+            ({"CVA_CREDENTIAL_BACKEND": "container-vault"}, "nt", None, "container", "container_vault"),
+            ({"CVA_CREDENTIAL_BACKEND": "os-keyring"}, "posix", "/.dockerenv", "posix_desktop", "os_keyring"),
+        ]:
+            with self.subTest(environment=environment, marker=marker, os_name=os_name):
+                selected = actual_selector(environment=environment, os_name=os_name, marker_exists=lambda path: path == Path(marker) if marker else False)
+                self.assertEqual((selected.runtime.value, selected.store.value), (runtime, store))
+                with patch.object(api, "select_credential_store", return_value=selected), \
+                        patch.object(api, "default_credential_store", return_value=object()) as factory:
+                    returned, _ = bridge.selected_credential_store(api)
+                self.assertIs(returned, selected)
+                factory.assert_called_once_with(selection=selected)
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX vault integration")
+    def test_native_vault_created_by_cva_is_read_by_downloader(self):
+        cva_root = Path(os.environ["CVA_TEST_ROOT"])
+        api = bridge.load_cva(cva_root)
+        from crunchyroll_video_analyzer.credential_store import CrunchyrollCredentials
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            key = root / "fixture.key"
+            key.write_bytes(bytes(range(32)))
+            key.chmod(0o400)
+            vault = root / "credentials.vault"
+            environment = {
+                "CVA_CONTAINER": "true", "CVA_CREDENTIAL_BACKEND": "auto",
+                "CVA_CREDENTIAL_VAULT_PATH": str(vault), "CVA_CREDENTIAL_KEY_PATH": str(key),
+            }
+            with patch.dict(os.environ, environment):
+                writer = api.default_credential_store()
+                writer.set(CrunchyrollCredentials("fixture-account", "fixture-secret"))
+                original = vault.read_bytes()
+                self.assertNotIn(b"fixture-secret", original)
+                # run() constructs a fresh production store from the same paths.
+                result = bridge.run(cva_root, {"operation": "credentials-check"})
+                self.assertEqual(result, {"status": "credentials_ok", "runtime": "container", "backend": "container_vault"})
+                self.assertEqual(vault.read_bytes(), original)
+                binary = os.environ.get("CRDL_TEST_BINARY")
+                if binary:
+                    completed = subprocess.run(
+                        [binary, "--credentials-check", "--cva-root", str(cva_root), "--cva-python", sys.executable],
+                        capture_output=True, text=True, timeout=30, check=False,
+                    )
+                    self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                    self.assertEqual(completed.stdout.strip(), "Stored CVA credentials are readable (container vault). No sign-in was attempted.")
+                    self.assertEqual(completed.stderr, "")
+                    self.assertEqual(vault.read_bytes(), original)
+                key.chmod(0o600)
+                key.write_bytes(bytes(reversed(range(32))))
+                key.chmod(0o400)
+                self.assertEqual(bridge.run(cva_root, {"operation": "credentials-check"}), {"status": "credential_locked"})
+                key.chmod(0o600)
+                key.write_bytes(bytes(range(32)))
+                key.chmod(0o400)
+                vault.write_bytes(b"invalid encrypted envelope")
+                self.assertEqual(bridge.run(cva_root, {"operation": "credentials-check"}), {"status": "credential_corrupt"})
+                vault.write_bytes(original)
+                vault.chmod(0o644)
+                self.assertEqual(bridge.run(cva_root, {"operation": "credentials-check"}), {"status": "credential_unavailable"})
+                vault.chmod(0o600)
+                writer.delete()
+                self.assertEqual(bridge.run(cva_root, {"operation": "credentials-check"}), {"status": "credentials_missing"})
+
+    @unittest.skipUnless(os.name == "nt", "Windows browser provider compatibility")
     def test_real_provider_reuses_session_then_reads_keyring_on_demand(self):
         # Load actual CVA classes, but inject a fake flow and fake credentials.
-        api = bridge.load_cva(Path(os.environ["CVA_TEST_ROOT"]))
+        bridge.load_cva(Path(os.environ["CVA_TEST_ROOT"]))
+        api = bridge.load_browser_api()
         from crunchyroll_video_analyzer.sso import SignedInBearer, SsoState
         from crunchyroll_video_analyzer.live_access import AccessToken
         from crunchyroll_video_analyzer.credential_store import CrunchyrollCredentials, CVA_CRUNCHYROLL_SERVICE

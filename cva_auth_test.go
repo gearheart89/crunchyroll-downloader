@@ -20,7 +20,11 @@ func TestDecodeCVAToken(t *testing.T) {
 	}{
 		{"success", `{"status":"ok","access_token":"fixture-token"}`, "fixture-token", ""},
 		{"missing", `{"status":"credentials_missing"}`, "", "no CVA credentials"},
-		{"incomplete", `{"status":"credential_store"}`, "", "could not be read"},
+		{"incomplete", `{"status":"credential_store"}`, "", "could not be accessed"},
+		{"locked", `{"status":"credential_locked","detail":"fixture-secret"}`, "", "vault is locked"},
+		{"corrupt", `{"status":"credential_corrupt","detail":"fixture-secret"}`, "", "vault is corrupt"},
+		{"unavailable", `{"status":"credential_unavailable"}`, "", "store is unavailable"},
+		{"bad configuration", `{"status":"credential_config"}`, "", "invalid CVA credential configuration"},
 		{"rejected", `{"status":"bad_credentials"}`, "", "rejected"},
 		{"challenge", `{"status":"verification_required"}`, "", "human verification"},
 		{"empty", `{"status":"ok","access_token":""}`, "", "failed"},
@@ -42,6 +46,58 @@ func TestDecodeCVAToken(t *testing.T) {
 				t.Fatalf("unexpected or unsafe error: %v", err)
 			}
 		})
+	}
+}
+
+func TestDecodeCVACredentialCheck(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{`{"status":"credentials_ok","runtime":"windows_desktop","backend":"os_keyring"}`, "OS keyring"},
+		{`{"status":"credentials_ok","runtime":"posix_desktop","backend":"os_keyring"}`, "OS keyring"},
+		{`{"status":"credentials_ok","runtime":"container","backend":"container_vault"}`, "container vault"},
+		{`{"status":"credentials_ok","runtime":"container","backend":"os_keyring"}`, ""},
+		{`{"status":"credentials_ok","runtime":"fixture-secret","backend":"fixture-secret"}`, ""},
+		{`{"status":"ok","access_token":"fixture-secret"}`, ""},
+		{`{"status":"credentials_missing"}`, ""},
+		{`fixture-secret`, ""},
+	} {
+		got, err := decodeCVACredentialCheck([]byte(tc.input))
+		if got != tc.want || (err == nil) != (tc.want != "") {
+			t.Fatalf("unexpected credential check result: %v", err)
+		}
+		if err != nil && strings.Contains(err.Error(), "fixture-secret") {
+			t.Fatal("credential diagnostics leaked helper data")
+		}
+	}
+}
+
+func TestCVACredentialCheckInvokesHelperWithConfiguration(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("Python is required for the bridge process test")
+	}
+	root := t.TempDir()
+	packagePath := filepath.Join(root, "crunchyroll_video_analyzer")
+	if err := os.Mkdir(packagePath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packagePath, "credential_store.py"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldScript := cvaAuthScript
+	t.Cleanup(func() { cvaAuthScript = oldScript })
+	for _, name := range []string{"CVA_CONTAINER", "CVA_CREDENTIAL_BACKEND", "CVA_CREDENTIAL_VAULT_PATH", "CVA_CREDENTIAL_KEY_PATH"} {
+		t.Setenv(name, "fixture-configuration")
+	}
+	cvaAuthScript = `import json,os,sys
+request = json.load(sys.stdin)
+assert request["operation"] == "credentials-check"
+assert request["source_url"] == ""
+for name in ("CVA_CONTAINER", "CVA_CREDENTIAL_BACKEND", "CVA_CREDENTIAL_VAULT_PATH", "CVA_CREDENTIAL_KEY_PATH"):
+    assert os.environ[name] == "fixture-configuration"
+print('{"status":"credentials_ok","runtime":"container","backend":"container_vault"}')`
+	got, err := checkCVACredentials(cvaAuthOptions{Root: root, Python: python})
+	if err != nil || got != "container vault" {
+		t.Fatalf("credential check failed: %v", err)
 	}
 }
 

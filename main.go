@@ -10,19 +10,20 @@ import (
 )
 
 var (
-	token         = ""
-	audioLang     = flag.String("audio-lang", "ja-JP", "Audio language(s), comma-separated (e.g. \"ja-JP,en-US\"). Add ALL for every available dub; explicit languages lead, the first available track is default, and ALL alone prefers ja-JP")
-	subtitlesLang = flag.String("subs-lang", "en-US", "Subtitle language(s), comma-separated (e.g. \"fr-FR,ALL\"). Add ALL for every available subtitle; explicit languages lead, the first available track is default, and ALL alone prefers en-US")
-	ccLang        = flag.String("cc-lang", "", "Closed caption language(s), comma-separated (e.g. \"en-US,ALL\"). Add ALL for every available caption; downloaded in addition to --subs-lang")
-	videoQuality  = flag.String("video-quality", "1080p", "Video quality")
-	audioQuality  = flag.String("audio-quality", "192k", "Audio quality")
-	seasonNumber  = flag.Int("season", 0, "Season number. Not used if an episode link is entered")
-	etpRt         = flag.String("etp-rt", "", "The \"etp_rt\" cookie value of your account")
-	cvaRoot       = flag.String("cva-root", "", "Crunchyroll Video Analyzer folder (default: sibling folder or CRUNCHYROLL_CVA_ROOT)")
-	cvaPython     = flag.String("cva-python", "", "Python executable with CVA dependencies (default: CRUNCHYROLL_CVA_PYTHON or python)")
-	authCheck     = flag.Bool("auth-check", false, "Check authentication and exit without downloading (requires --url or --file)")
-	debug         = flag.Bool("debug-manifest", false, "Log raw episode playback JSON and manifest XML")
-	downloadDelay = flag.Duration("download-delay", 0, "Minimum delay between episode downloads, to help avoid Crunchyroll's rate limiting (e.g. \"30s\", \"2m\")")
+	token            = ""
+	audioLang        = flag.String("audio-lang", "ja-JP", "Audio language(s), comma-separated (e.g. \"ja-JP,en-US\"). Add ALL for every available dub; explicit languages lead, the first available track is default, and ALL alone prefers ja-JP")
+	subtitlesLang    = flag.String("subs-lang", "en-US", "Subtitle language(s), comma-separated (e.g. \"fr-FR,ALL\"). Add ALL for every available subtitle; explicit languages lead, the first available track is default, and ALL alone prefers en-US")
+	ccLang           = flag.String("cc-lang", "", "Closed caption language(s), comma-separated (e.g. \"en-US,ALL\"). Add ALL for every available caption; downloaded in addition to --subs-lang")
+	videoQuality     = flag.String("video-quality", "1080p", "Video quality")
+	audioQuality     = flag.String("audio-quality", "192k", "Audio quality")
+	seasonNumber     = flag.Int("season", 0, "Season number. Not used if an episode link is entered")
+	etpRt            = flag.String("etp-rt", "", "The \"etp_rt\" cookie value of your account")
+	cvaRoot          = flag.String("cva-root", "", "Crunchyroll Video Analyzer folder (default: sibling folder or CRUNCHYROLL_CVA_ROOT)")
+	cvaPython        = flag.String("cva-python", "", "Python executable with CVA dependencies (default: CRUNCHYROLL_CVA_PYTHON, then python on Windows or python3 elsewhere)")
+	authCheck        = flag.Bool("auth-check", false, "Check authentication and exit without downloading (requires --url or --file)")
+	credentialsCheck = flag.Bool("credentials-check", false, "Check readability of CVA's selected credential store without signing in (no URL required)")
+	debug            = flag.Bool("debug-manifest", false, "Log raw episode playback JSON and manifest XML")
+	downloadDelay    = flag.Duration("download-delay", 0, "Minimum delay between episode downloads, to help avoid Crunchyroll's rate limiting (e.g. \"30s\", \"2m\")")
 )
 
 // backoff spaces out consecutive episode downloads by *downloadDelay. It is
@@ -122,6 +123,20 @@ func main() {
 	url := flag.String("url", "", "URL of the episode/season to download")
 	urlsFile := flag.String("file", "", "Path to a text file with one URL per line")
 	flag.Parse()
+
+	if *credentialsCheck {
+		if *authCheck || *etpRt != "" || *url != "" || *urlsFile != "" {
+			fmt.Println("--credentials-check cannot be combined with --auth-check, --etp-rt, --url or --file.")
+			os.Exit(1)
+		}
+		backend, err := checkCVACredentials(cvaAuthOptions{Root: *cvaRoot, Python: *cvaPython})
+		if err != nil {
+			fmt.Printf("Couldn't read stored credentials: %s\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Stored CVA credentials are readable (%s). No sign-in was attempted.\n", backend)
+		return
+	}
 
 	if *url == "" && *urlsFile == "" {
 		flag.Usage()
