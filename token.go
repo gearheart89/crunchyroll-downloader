@@ -60,9 +60,9 @@ func GetAccessToken(etpRt string) (string, error) {
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
-		return "", fmt.Errorf("%w (HTTP %d: %s)", errAuthRejected, resp.StatusCode, strings.TrimSpace(string(res)))
+		return "", fmt.Errorf("%w (HTTP %d)", errAuthRejected, resp.StatusCode)
 	default:
-		return "", fmt.Errorf("failed to get access token: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(res)))
+		return "", fmt.Errorf("failed to get access token: HTTP %d", resp.StatusCode)
 	}
 
 	var result CrunchyrollTokenResponse

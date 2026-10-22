@@ -17,7 +17,7 @@ func DoRequest(req *http.Request) (*http.Response, error) {
 
 	print("Access token expired. Refetching one...\n")
 	resp.Body.Close()
-	newToken, err := GetAccessToken(*etpRt)
+	newToken, err := accessTokenProvider()
 	if err != nil {
 		return nil, err
 	}

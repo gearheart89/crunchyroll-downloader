@@ -11,3 +11,8 @@ private_key.pem
 # Compiled binaries
 /crunchyroll-downloader
 *.exe
+
+# Local development tools and Python caches
+/.tools/
+__pycache__/
+*.pyc

@@ -18,6 +18,9 @@ var (
 	audioQuality  = flag.String("audio-quality", "192k", "Audio quality")
 	seasonNumber  = flag.Int("season", 0, "Season number. Not used if an episode link is entered")
 	etpRt         = flag.String("etp-rt", "", "The \"etp_rt\" cookie value of your account")
+	cvaRoot       = flag.String("cva-root", "", "Crunchyroll Video Analyzer folder (default: sibling folder or CRUNCHYROLL_CVA_ROOT)")
+	cvaPython     = flag.String("cva-python", "", "Python executable with CVA dependencies (default: CRUNCHYROLL_CVA_PYTHON or python)")
+	authCheck     = flag.Bool("auth-check", false, "Check authentication and exit without downloading (requires --url or --file)")
 	debug         = flag.Bool("debug-manifest", false, "Log raw episode playback JSON and manifest XML")
 	downloadDelay = flag.Duration("download-delay", 0, "Minimum delay between episode downloads, to help avoid Crunchyroll's rate limiting (e.g. \"30s\", \"2m\")")
 )
@@ -125,21 +128,29 @@ func main() {
 		os.Exit(1)
 	}
 
-	if *etpRt == "" {
-		fmt.Println("You must specify the \"-etp-rt\" option!\n- Open Crunchyroll on your browser and log in.\n- Open developer tools (Ctrl+Shift+I), go to \"Application\", and then \"Cookies\".\n- The value of the \"ept_rt\" cookie is what you need to input into this option.")
-		os.Exit(1)
-	}
-
-	// Checked up front so a missing ffmpeg fails before anything is downloaded,
-	// not at merge time after every track has been fetched.
-	ffmpeg, err := findFFmpeg()
+	urls, err := inputURLs(*url, *urlsFile)
 	if err != nil {
-		fmt.Println("FFmpeg wasn't found. Install it and add it to your PATH, or put the ffmpeg executable in the same folder as this program.\nDownload it from https://www.ffmpeg.org/download.html")
+		fmt.Printf("Couldn't read input: %s\n", err)
 		os.Exit(1)
 	}
-	ffmpegPath = ffmpeg
+	accessTokenProvider, err = newAccessTokenProvider(*etpRt, cvaAuthOptions{
+		Root: *cvaRoot, Python: *cvaPython, SourceURL: urls[0],
+	})
+	if err != nil {
+		fmt.Printf("Couldn't configure sign-in: %s\n", err)
+		os.Exit(1)
+	}
+	// The authentication check deliberately needs no FFmpeg or media files.
+	if !*authCheck {
+		ffmpeg, err := findFFmpeg()
+		if err != nil {
+			fmt.Println("FFmpeg wasn't found. Install it and add it to your PATH, or put the ffmpeg executable in the same folder as this program.\nDownload it from https://www.ffmpeg.org/download.html")
+			os.Exit(1)
+		}
+		ffmpegPath = ffmpeg
+	}
 
-	token, err = GetAccessToken(*etpRt)
+	token, err = accessTokenProvider()
 	if errors.Is(err, errAuthRejected) {
 		fmt.Printf("Couldn't log in: %s\nYour \"-etp-rt\" cookie is wrong or expired. Copy a fresh one from your browser (see the README).\n", err)
 		os.Exit(1)
@@ -148,25 +159,13 @@ func main() {
 		fmt.Printf("Couldn't log in: %s\n", err)
 		os.Exit(1)
 	}
+	if *authCheck {
+		fmt.Println("Authentication succeeded. No media was downloaded.")
+		return
+	}
 	backoff = newDownloadBackoff(*downloadDelay)
 
 	if *urlsFile != "" {
-		file, err := os.Open(*urlsFile)
-		if err != nil {
-			fmt.Printf("Failed to open URLs file: %s\n", err)
-			os.Exit(1)
-		}
-		defer file.Close()
-
-		scanner := bufio.NewScanner(file)
-		var urls []string
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line != "" && strings.HasPrefix(line, "http") {
-				urls = append(urls, line)
-			}
-		}
-
 		fmt.Printf("Found %d URLs to download\n\n", len(urls))
 		for i, u := range urls {
 			fmt.Printf("=== [%d/%d] %s ===\n", i+1, len(urls), u)
@@ -174,6 +173,35 @@ func main() {
 			fmt.Println()
 		}
 	} else {
-		processUrl(*url)
+		processUrl(urls[0])
 	}
+}
+
+func inputURLs(url, filename string) ([]string, error) {
+	if filename == "" {
+		if strings.TrimSpace(url) == "" {
+			return nil, errors.New("a URL or URLs file is required")
+		}
+		return []string{strings.TrimSpace(url)}, nil
+	}
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	var urls []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "http") {
+			urls = append(urls, line)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if len(urls) == 0 {
+		return nil, errors.New("the URLs file contains no URLs")
+	}
+	return urls, nil
 }

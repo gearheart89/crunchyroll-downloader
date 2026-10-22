@@ -2,7 +2,7 @@ name: Tests
 
 on:
   push:
-    branches: [master]
+    branches: [master, 'feature/**']
   pull_request:
 
 permissions:
@@ -21,6 +21,14 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+
+      - name: Set up Python for the authentication bridge tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Test authentication bridge without credentials or browser access
+        run: python -B -m unittest discover -s tests -v
 
       # The download tests cover concurrency, so repeat them to give ordering and deadlock regressions a chance to show up
       - name: Test
