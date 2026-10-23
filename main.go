@@ -16,6 +16,8 @@ var (
 	ccLang           = flag.String("cc-lang", "", "Closed caption language(s), comma-separated (e.g. \"en-US,ALL\"). Add ALL for every available caption; downloaded in addition to --subs-lang")
 	videoQuality     = flag.String("video-quality", "1080p", "Video quality")
 	audioQuality     = flag.String("audio-quality", "192k", "Audio quality")
+	outputFormat     = flag.String("output-format", "mkv", "Output container: mkv (embedded subtitles) or mp4 (original subtitle files alongside video)")
+	forcedSubsLang   = flag.String("forced-subs-lang", "", "Mark selected subtitle locales as forced, comma-separated (e.g. en-US); labels whole tracks, does not select or extract cues")
 	seasonNumber     = flag.Int("season", 0, "Season number. Not used if an episode link is entered")
 	etpRt            = flag.String("etp-rt", "", "The \"etp_rt\" cookie value of your account")
 	cvaRoot          = flag.String("cva-root", "", "Crunchyroll Video Analyzer folder (default: sibling folder or CRUNCHYROLL_CVA_ROOT)")
@@ -123,6 +125,12 @@ func main() {
 	url := flag.String("url", "", "URL of the episode/season to download")
 	urlsFile := flag.String("file", "", "Path to a text file with one URL per line")
 	flag.Parse()
+	format, err := parseOutputFormat(*outputFormat)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	*outputFormat = format
 
 	if *credentialsCheck {
 		if *authCheck || *etpRt != "" || *url != "" || *urlsFile != "" {

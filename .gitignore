@@ -7,6 +7,12 @@ client_id.bin
 private_key.pem
 
 *.mkv
+*.mp4
+*.ass
+*.ssa
+*.srt
+*.vtt
+.crdl-output-*/
 
 # Compiled binaries
 /crunchyroll-downloader

@@ -135,7 +135,8 @@ credentials and do not claim a deployed Unraid/Docker application test.
 - Supports choosing the audio and subtitles language, including downloading multiple of each into a single file
 - Supports choosing the audio and video quality
 - Decrypts Widevine DRM (requires: a `.wvd` file or `client_id.bin` and `private_key.pem` files)
-- Adds metadata (like episode name) to the MKV container
+- Outputs MKV with embedded subtitles, or MP4 with subtitles in separate files
+- Adds metadata (like episode name) to the output container
 - Parallel segment downloads (10 workers) for faster downloads
 - Retry with backoff on connection errors
 - Batch download from a list of URLs
@@ -178,6 +179,10 @@ Usage of ./crunchyroll-downloader:
         The "etp_rt" cookie value of your account
   -file string
         Path to a text file with one URL per line
+  -forced-subs-lang string
+        Mark selected subtitle locales as forced, comma-separated (e.g. en-US); labels whole tracks, does not select or extract cues
+  -output-format string
+        Output container: mkv (embedded subtitles) or mp4 (original subtitle files alongside video) (default "mkv")
   -season int
         Season number. Not used if an episode link is entered
   -subs-lang string
@@ -216,6 +221,49 @@ Add `ALL` to any language list to include every available language; listed langu
 ./crunchyroll-downloader --url https://www.crunchyroll.com/watch/GE00198973JAJP/dawn-and-confusion --etp-rt replace_this --audio-lang ja-JP,ALL --subs-lang fr-FR,ALL --cc-lang ALL
 ```
 
+### MP4 and external subtitles
+
+Use `--output-format mp4` to mux video and all selected audio tracks into MP4.
+Audio and video are copied without re-encoding; their codecs must be supported
+by MP4. Requested subtitles and closed captions are saved separately, preserving
+the original bytes and format: ASS stays ASS, SRT stays SRT, and VTT stays VTT.
+No subtitle tracks are embedded in MP4. Omit the option, or use
+`--output-format mkv`, for the existing embedded-subtitle behavior.
+
+```powershell
+.\crunchyroll-downloader.exe --url "https://www.crunchyroll.com/watch/GE00198973JAJP/dawn-and-confusion" --output-format mp4 --audio-lang ja-JP,en-US --subs-lang en-US --cc-lang en-US
+```
+
+Sidecars follow [Plex's external subtitle naming convention](https://support.plex.tv/articles/200471133-adding-local-subtitles-to-your-media/):
+the exact video basename, an ISO language code, optional `forced` or `cc` tags,
+and the source extension. For example (depending on the supplied source tracks):
+
+```text
+Example S01E01 - Pilot [1080p].mp4
+Example S01E01 - Pilot [1080p].en.srt
+Example S01E01 - Pilot [1080p].fr.forced.ass
+Example S01E01 - Pilot [1080p].en.cc.vtt
+```
+
+The playback fields currently read by this downloader do not provide a verified
+forced-subtitle marker. Tracks are not labeled forced just because they are the
+default, match an audio language, or contain ASS styling. When you know a selected
+subtitle track is forced/supplemental-only, add `--forced-subs-lang fr-FR` (or a
+comma-separated list). This labels the whole selected track; it does not fetch
+another track, extract signs from full dialogue, or apply to closed captions.
+For MKV, the same explicit option sets the embedded forced disposition.
+
+Regional variants share a Plex language code. If two selected tracks would have
+the same filename, the second uses the ISO 639-2/B alias (for example, `.es.ass`
+and `.spa.ass`). Further variants go into a sibling `subtitles` folder, supported
+by Plex Media Server 1.41.0+ with the Plex TV Series or Plex Movie agent. The
+console reports each source locale and its output path. Files are never silently
+overwritten; an existing identical subtitle can be reused, but a differing file
+stops the export. Failed exports keep the downloaded inputs and do not leave a
+finished-looking MP4. Existing MKV files do not cause MP4 downloads to be skipped.
+
+### Download pacing
+
 If you're getting rate-limited while downloading a season/batch, wait at least this long between each episode:
 ```shell
 ./crunchyroll-downloader --url https://www.crunchyroll.com/series/GJ0H7Q5ZJ/hells-paradise --season 1 --etp-rt replace_this --download-delay 30s
@@ -253,7 +301,10 @@ store. On Linux, they also create a disposable encrypted vault through CVA and
 read it through the downloader, checking locked/corrupt/permission failures.
 Set `CRDL_TEST_BINARY` to an absolute Linux downloader executable path to include
 the complete CLI-to-Python vault-read check. The CI Go suite also runs with the
-race detector.
+race detector. With FFmpeg and FFprobe on PATH, the Go tests additionally generate
+short synthetic clips to check both containers, copied audio/video packet hashes,
+subtitle byte preservation and naming, and failed-export cleanup. These tests
+use no account, network, or downloaded media.
 
 ## Help
 

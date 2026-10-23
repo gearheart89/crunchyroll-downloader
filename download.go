@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	runtimedebug "runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -478,12 +479,13 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 		_ = os.MkdirAll(cleanSeriesTitle, 0777)
 	}
 
-	outputFile := filepath.Join(cleanSeriesTitle, fmt.Sprintf("%s S%02dE%02d - %s [%s].mkv",
+	outputFile := filepath.Join(cleanSeriesTitle, fmt.Sprintf("%s S%02dE%02d - %s [%s].%s",
 		cleanSeriesTitle,
 		info.EpisodeMetadata.SeasonNumber,
 		info.EpisodeMetadata.EpisodeNumber,
 		cleanEpisodeTitle,
 		*videoQuality,
+		*outputFormat,
 	))
 
 	if _, statErr := os.Stat(outputFile); statErr == nil {
@@ -620,11 +622,13 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 		format string
 		locale string
 		isCC   bool
+		forced bool
 	}
 	var subJobs []subJob
+	forcedLangs := parseLangs(*forcedSubsLang)
 	for _, locale := range subsLangs {
 		sub := subtitles[locale]
-		subJobs = append(subJobs, subJob{url: sub.URL, format: sub.Format, locale: locale})
+		subJobs = append(subJobs, subJob{url: sub.URL, format: sub.Format, locale: locale, forced: slices.Contains(forcedLangs, locale)})
 	}
 	for _, locale := range ccLangs {
 		cc := captions[locale]
@@ -660,7 +664,7 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 				fail(fmt.Errorf("downloading subtitles for %s: %w", trackTitle(job.locale), err))
 				return
 			}
-			subTracks[j] = mediaTrack{file: file, locale: job.locale, format: job.format, isCC: job.isCC}
+			subTracks[j] = mediaTrack{file: file, locale: job.locale, format: job.format, isCC: job.isCC, forced: job.forced}
 		}(j, job)
 	}
 
