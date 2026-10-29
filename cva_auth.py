@@ -6,10 +6,18 @@ from the user's installation; it does not copy secrets or modify that project.
 
 import contextlib
 import json
+import math
 import os
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
+import uuid
+
+
+SESSION_SERVICE = "Crunchyroll Downloader/Crunchyroll Session"
+SESSION_SCHEMA = "crunchyroll-downloader-session-v1"
+COOKIE_URL = "https://www.crunchyroll.com/auth/v1/token"
 
 
 class BridgeError(Exception):
@@ -24,6 +32,7 @@ def load_cva(root):
     from crunchyroll_video_analyzer.credential_store import (
         CredentialRuntimeKind, CredentialStorageCorrupt,
         CredentialStorageLocked, CredentialStorageUnavailable,
+        CrunchyrollCredentials, KeyringCredentialStore, ContainerCredentialVault,
         default_credential_store, select_credential_store,
     )
     return SimpleNamespace(**locals())
@@ -76,7 +85,111 @@ def read_credentials(api, store):
     return pair
 
 
-def acquire_token(api, source_url, application_root, credential_lookup):
+def selected_session_store(api, selection, account_store):
+    """Reuse CVA encryption/permissions/locking, without changing its login pair."""
+    try:
+        if selection.store.value == "os_keyring":
+            return api.KeyringCredentialStore(service=SESSION_SERVICE)
+        return api.ContainerCredentialVault(
+            account_store.vault_path.with_name(account_store.vault_path.name + ".downloader-session"),
+            account_store.key_path,
+        )
+    except ValueError:
+        raise BridgeError("credential_config") from None
+    except Exception:
+        raise BridgeError("credential_unavailable") from None
+
+
+def valid_cookie(value):
+    # RFC 6265 cookie-octet; reject instead of letting HTTP clients strip bytes.
+    return (isinstance(value, str) and 0 < len(value) <= 16384
+            and all(0x21 <= ord(char) <= 0x7e and char not in '\";,\\' for char in value))
+
+
+def validate_session(value):
+    if not isinstance(value, dict) or set(value) != {"cookie", "device_id", "expires_at"}:
+        raise BridgeError("session_invalid")
+    if not valid_cookie(value["cookie"]) or not valid_cookie(value["device_id"]):
+        raise BridgeError("session_invalid")
+    expiry = value["expires_at"]
+    if type(expiry) is not int or not 0 <= expiry <= 253402300799:
+        raise BridgeError("session_invalid")
+    return value
+
+
+def session_store_call(api, action):
+    try:
+        return action()
+    except BridgeError:
+        raise
+    except api.CredentialStorageLocked:
+        raise BridgeError("credential_locked") from None
+    except api.CredentialStorageCorrupt:
+        raise BridgeError("credential_corrupt") from None
+    except api.CredentialStorageUnavailable:
+        raise BridgeError("credential_unavailable") from None
+    except Exception:
+        raise BridgeError("credential_store") from None
+
+
+def read_session(api, store):
+    pair = session_store_call(api, store.get)
+    if pair is None:
+        return None
+    if pair.account != SESSION_SCHEMA:
+        raise BridgeError("session_invalid")
+    try:
+        value = json.loads(pair.password)
+    except (ValueError, TypeError):
+        raise BridgeError("session_invalid") from None
+    return validate_session(value)
+
+
+def write_session(api, store, value):
+    value = validate_session(value)
+    pair = api.CrunchyrollCredentials(SESSION_SCHEMA, json.dumps(value, separators=(",", ":")))
+    session_store_call(api, lambda: store.set(pair))
+
+
+def browser_session_cookies(page):
+    result = page.connection.send("Network.getCookies", {"urls": [COOKIE_URL]})
+    if not isinstance(result, dict) or not isinstance(result.get("cookies"), list):
+        raise BridgeError("session_unavailable")
+    # Only the dedicated downloader profile and the exact service's cookies.
+    return [cookie for cookie in result["cookies"] if isinstance(cookie, dict)
+            and cookie.get("domain") in {"crunchyroll.com", ".crunchyroll.com", "www.crunchyroll.com", ".www.crunchyroll.com"}
+            and cookie.get("name") in {"etp_rt", "device_id"}]
+
+
+def read_browser_session(page):
+    cookies = browser_session_cookies(page)
+    matches = [cookie for cookie in cookies if cookie["name"] == "etp_rt"]
+    if len(matches) != 1 or matches[0].get("secure") is not True:
+        raise BridgeError("session_unavailable")
+    cookie = matches[0]
+    expiry = cookie.get("expires", -1)
+    if not isinstance(expiry, (int, float)) or not math.isfinite(expiry):
+        raise BridgeError("session_invalid")
+    expiry = max(0, int(expiry))
+    if expiry and expiry <= time.time():
+        raise BridgeError("session_unavailable")
+    devices = {item.get("value") for item in cookies if item["name"] == "device_id" and valid_cookie(item.get("value"))}
+    if len(devices) > 1:
+        raise BridgeError("session_unavailable")
+    return validate_session({"cookie": cookie.get("value"), "device_id": next(iter(devices), str(uuid.uuid4())), "expires_at": expiry})
+
+
+def discard_rejected_browser_cookie(page):
+    # A rejected saved cookie must not be recaptured from the downloader's
+    # existing Chrome session. Other cookies and CVA's profile are untouched.
+    for cookie in browser_session_cookies(page):
+        if cookie["name"] == "etp_rt":
+            page.connection.send("Network.deleteCookies", {
+                "name": "etp_rt", "domain": cookie["domain"], "path": cookie.get("path", "/"),
+            })
+
+
+def acquire_token(api, source_url, application_root, credential_lookup, *, session_sink=None, force_refresh=False):
     identity = api.parse_crunchyroll_resource(source_url)
     if identity is None:
         raise BridgeError("source")
@@ -99,6 +212,8 @@ def acquire_token(api, source_url, application_root, credential_lookup):
         browser = api.bind_launcher_runtime_to_cdp(runtime)
         try:
             with browser.connect_page(preferred_url_substring=None) as page:
+                if force_refresh:
+                    discard_rejected_browser_cookie(page)
                 configuration = api.SourceBoundConfigurationAcquirer().acquire(page, source)
         except Exception:
             raise BridgeError("configuration") from None
@@ -114,7 +229,11 @@ def acquire_token(api, source_url, application_root, credential_lookup):
             credential_lookup=credential_lookup,
         )
         try:
-            return provider.get_token()
+            token = provider.get_token()
+            if session_sink is not None:
+                with browser.connect_page(preferred_url_substring="crunchyroll.com") as page:
+                    session_sink(read_browser_session(page))
+            return token
         except api.SsoInteractionRequired as error:
             raise BridgeError(error.state.value) from None
     finally:
@@ -130,12 +249,19 @@ def run(root, request):
         return {"status": "dependencies"}
     try:
         operation = request.get("operation", "token")
-        if operation not in {"token", "credentials-check"}:
+        if operation not in {"token", "credentials-check", "session-read", "session-write", "session-refresh"}:
             raise BridgeError("protocol")
         source_url = request.get("source_url")
-        if operation == "token" and (not isinstance(source_url, str) or not source_url):
+        if operation in {"token", "session-refresh"} and (not isinstance(source_url, str) or not source_url):
             raise BridgeError("source")
         selection, store = selected_credential_store(api)
+        if operation in {"session-read", "session-write"}:
+            session_store = selected_session_store(api, selection, store)
+            if operation == "session-read":
+                value = read_session(api, session_store)
+                return {"status": "session_missing"} if value is None else {"status": "session_ok", "session": value}
+            write_session(api, session_store, request.get("session"))
+            return {"status": "session_saved"}
         if operation == "credentials-check":
             # Confirm decryption/readability, but never serialize the pair.
             read_credentials(api, store)
@@ -145,6 +271,8 @@ def run(root, request):
                 "backend": selection.store.value,
             }
         if selection.runtime is not api.CredentialRuntimeKind.WINDOWS_DESKTOP:
+            if operation == "session-refresh":
+                raise BridgeError("session_refresh_unsupported")
             raise BridgeError("browser_runtime_unsupported")
         local_app_data = os.environ.get("LOCALAPPDATA")
         if not local_app_data:
@@ -155,6 +283,21 @@ def run(root, request):
             raise BridgeError("dependencies") from None
         # Share CVA's selected credential store, never its profile/runtime state.
         application_root = Path(local_app_data) / "Crunchyroll Downloader"
+        if operation == "session-refresh":
+            force_refresh = request.get("force_refresh", False)
+            if type(force_refresh) is not bool:
+                raise BridgeError("protocol")
+            captured = []
+            acquire_token(
+                browser_api, source_url, application_root,
+                lambda: read_credentials(api, store),
+                session_sink=captured.append, force_refresh=force_refresh,
+            )
+            if len(captured) != 1:
+                raise BridgeError("session_unavailable")
+            # Go validates the new cookie with the token endpoint before saving
+            # it. Failed sign-in or transport never replaces the previous cache.
+            return {"status": "session_ok", "session": captured[0]}
         token = acquire_token(
             browser_api, source_url, application_root,
             lambda: read_credentials(api, store),
@@ -169,7 +312,8 @@ def run(root, request):
 
 def main():
     # stdout is a protocol-only pipe, not a log. Suppress all library output and
-    # serialize no arbitrary exceptions, account names, passwords or cookies.
+    # serialize no arbitrary exceptions, account names or passwords. Session
+    # operations carry a cookie only over this private parent/child pipe.
     protocol = sys.stdout
     with open(os.devnull, "w", encoding="utf-8") as sink:
         with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):

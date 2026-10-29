@@ -48,14 +48,14 @@ func downloadPart(url string) ([]byte, error) {
 			if attempt < maxRetries-1 {
 				continue
 			}
-			return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, err)
+			return nil, failure("network_failed", "downloading", fmt.Errorf("failed after %d attempts: %w", maxRetries, err))
 		}
 		if resp.StatusCode != 200 {
 			resp.Body.Close()
 			if attempt < maxRetries-1 {
 				continue
 			}
-			return nil, fmt.Errorf("failed after %d retries, status: %d", maxRetries, resp.StatusCode)
+			return nil, failure("response_failed", "downloading", fmt.Errorf("failed after %d attempts, status: %d", maxRetries, resp.StatusCode))
 		}
 
 		body, err := io.ReadAll(resp.Body)
@@ -64,7 +64,7 @@ func downloadPart(url string) ([]byte, error) {
 			if attempt < maxRetries-1 {
 				continue
 			}
-			return nil, fmt.Errorf("failed reading body after %d retries: %w", maxRetries, err)
+			return nil, failure("body_read_failed", "downloading", fmt.Errorf("failed reading body after %d attempts: %w", maxRetries, err))
 		}
 		return body, nil
 	}
@@ -72,20 +72,28 @@ func downloadPart(url string) ([]byte, error) {
 }
 
 func getFilename(set *mpd.AdaptationSet, subExt string) string {
+	create := func(pattern string) string {
+		f, err := os.CreateTemp("", pattern)
+		if err != nil {
+			panic(err)
+		}
+		name := f.Name()
+		if err := f.Close(); err != nil {
+			panic(err)
+		}
+		return name
+	}
 	if set == nil {
 		if subExt == "" {
 			subExt = "ass"
 		}
-		f, _ := os.CreateTemp("", "crdl-subs-*."+subExt)
-		return f.Name()
+		return create("crdl-subs-*." + subExt)
 	}
 	for _, representation := range set.Representations {
 		if representation.Height != nil {
-			f, _ := os.CreateTemp("", "crdl-video-*.mp4")
-			return f.Name()
+			return create("crdl-video-*.mp4")
 		} else if representation.Bandwidth != nil {
-			f, _ := os.CreateTemp("", "crdl-audio-*.mp3")
-			return f.Name()
+			return create("crdl-audio-*.mp3")
 		}
 	}
 	return ""
@@ -143,6 +151,7 @@ func streamSegments(w io.Writer, urls []string, fetch func(string) ([]byte, erro
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer recoverWorker(fail, "downloading")
 			for {
 				select {
 				case slots <- struct{}{}:
@@ -178,6 +187,7 @@ func streamSegments(w io.Writer, urls []string, fetch func(string) ([]byte, erro
 	writerDone := make(chan struct{})
 	go func() {
 		defer close(writerDone)
+		defer recoverWorker(fail, "downloading")
 		for i := 0; i < total; i++ {
 			mu.Lock()
 			for !ready[i] && failure == nil {
@@ -208,7 +218,7 @@ func streamSegments(w io.Writer, urls []string, fetch func(string) ([]byte, erro
 	return failure
 }
 
-func downloadParts(title string, baseUrl, representationId *string, set *mpd.AdaptationSet, keys []*widevine.Key) (string, error) {
+func downloadParts(title string, baseUrl, representationId *string, set *mpd.AdaptationSet, keys []*widevine.Key, tracks ...trackIdentity) (result string, err error) {
 	initUrl := buildUrl(*baseUrl, *representationId, *set.SegmentTemplate.Initialization, nil)
 	initData, err := downloadPart(initUrl)
 	if err != nil {
@@ -223,19 +233,24 @@ func downloadParts(title string, baseUrl, representationId *string, set *mpd.Ada
 	}
 
 	filename := getFilename(set, "")
+	defer func() {
+		if result == "" {
+			removeTemporary(filename)
+		}
+	}()
 	encPath := filename + ".enc"
 	encFile, err := os.Create(encPath)
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(encPath)
+	defer removeTemporary(encPath)
 	defer encFile.Close()
 
 	if _, err = encFile.Write(initData); err != nil {
 		return "", fmt.Errorf("writing init segment: %w", err)
 	}
 
-	bar := newProgressBar(title, int64(total), "segments")
+	bar := newProgressBar(title, int64(total), "segments", tracks...)
 	var totalBytes atomic.Int64
 	fetch := func(url string) ([]byte, error) {
 		data, err := downloadPart(url)
@@ -251,6 +266,8 @@ func downloadParts(title string, baseUrl, representationId *string, set *mpd.Ada
 	if err != nil {
 		return "", err
 	}
+	bar.transferred()
+	events.setPhase("decrypting")
 
 	if _, err = encFile.Seek(0, io.SeekStart); err != nil {
 		return "", fmt.Errorf("rewinding %s: %w", encPath, err)
@@ -263,7 +280,10 @@ func downloadParts(title string, baseUrl, representationId *string, set *mpd.Ada
 	defer file.Close()
 
 	if err = decryptMP4(initData, encFile, keys, file); err != nil {
-		return "", fmt.Errorf("decryptMP4: %w", err)
+		return "", failure("decryption_failed", "decrypting", fmt.Errorf("decryptMP4: %w", err))
+	}
+	if err := file.Close(); err != nil {
+		return "", failure("decryption_failed", "decrypting", err)
 	}
 
 	return filename, nil
@@ -273,29 +293,35 @@ func downloadParts(title string, baseUrl, representationId *string, set *mpd.Ada
 // file. sets is non-nil only for on-demand manifests.
 func downloadAudioTrack(manifest *mpd.MPD, sets []onDemandAdaptationSet, locale, quality string, keys []*widevine.Key) (string, error) {
 	title := "Downloading " + trackTitle(locale) + " audio"
+	track := trackIdentity{id: "audio:" + locale, kind: "audio", locale: locale}
+	events.setPhase("downloading")
+	events.trackStarted(track)
 	if isOnDemand(manifest) {
-		return downloadOnDemandAdaptation(title, sets, false, quality, keys)
+		return downloadOnDemandAdaptation(title, sets, false, quality, keys, track)
 	}
 	audioSet := manifest.Period[0].AdaptationSets[1]
 	audioBaseUrl, audioRepresentationId := getBaseUrl(audioSet, false, quality)
 	if audioBaseUrl == nil {
 		return "", fmt.Errorf("failed to get the audio base URL for %s, maybe the audio quality you entered is wrong?", locale)
 	}
-	return downloadParts(title, audioBaseUrl, audioRepresentationId, audioSet, keys)
+	return downloadParts(title, audioBaseUrl, audioRepresentationId, audioSet, keys, track)
 }
 
 // downloadVideoTrack downloads the video representation into a temporary file.
-// The video track is identical across dubs, so it is downloaded only once.
+// Video is downloaded once, from the first selected audio version's manifest.
 func downloadVideoTrack(manifest *mpd.MPD, sets []onDemandAdaptationSet, quality string, keys []*widevine.Key) (string, error) {
+	track := trackIdentity{id: "video:0", kind: "video"}
+	events.setPhase("downloading")
+	events.trackStarted(track)
 	if isOnDemand(manifest) {
-		return downloadOnDemandAdaptation("Downloading video", sets, true, quality, keys)
+		return downloadOnDemandAdaptation("Downloading video", sets, true, quality, keys, track)
 	}
 	videoSet := manifest.Period[0].AdaptationSets[0]
 	baseUrl, representationId := getBaseUrl(videoSet, true, quality)
 	if baseUrl == nil {
 		return "", fmt.Errorf("failed to get the video base URL, maybe the video quality you entered is wrong?")
 	}
-	return downloadParts("Downloading video", baseUrl, representationId, videoSet, keys)
+	return downloadParts("Downloading video", baseUrl, representationId, videoSet, keys, track)
 }
 
 func downloadSubs(url, format string) (string, error) {
@@ -472,25 +498,21 @@ func availableSubtitleLangs(tracks map[string]*Subtitle) []string {
 }
 
 func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLangs, ccLangs []string, videoQuality, audioQuality *string) (err error) {
-	cleanSeriesTitle := sanitizeFilename(info.EpisodeMetadata.SeriesTitle)
-	cleanEpisodeTitle := sanitizeFilename(info.Title)
-
-	if _, err := os.Stat(cleanSeriesTitle); err != nil {
-		_ = os.MkdirAll(cleanSeriesTitle, 0777)
+	outputFile, err := episodeOutputPath(info, *videoQuality, *outputDir, *outputFilename, *outputFormat)
+	if err != nil {
+		return failure("output_configuration_failed", "resolving", err)
 	}
-
-	outputFile := filepath.Join(cleanSeriesTitle, fmt.Sprintf("%s S%02dE%02d - %s [%s].%s",
-		cleanSeriesTitle,
-		info.EpisodeMetadata.SeasonNumber,
-		info.EpisodeMetadata.EpisodeNumber,
-		cleanEpisodeTitle,
-		*videoQuality,
-		*outputFormat,
-	))
+	if err := os.MkdirAll(filepath.Dir(outputFile), 0o755); err != nil {
+		return failure("output_configuration_failed", "resolving", fmt.Errorf("creating output directory: %w", err))
+	}
+	events.output(outputFile, false)
 
 	if _, statErr := os.Stat(outputFile); statErr == nil {
 		fmt.Printf("Episode %v is already downloaded, skipping...\n", info.EpisodeMetadata.EpisodeNumber)
+		events.output(outputFile, true)
 		return
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return failure("output_configuration_failed", "resolving", fmt.Errorf("checking output file: %w", statErr))
 	}
 
 	// Resolve each requested audio locale to its version GUID. Each dub is a
@@ -512,7 +534,10 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 	var versions []audioVersion
 	for _, locale := range audioLangs {
 		guid, ok := guidByLocale[locale]
-		if !ok {
+		if !ok || guid == "" {
+			if events != nil {
+				return failure("requested_audio_unavailable", "resolving", fmt.Errorf("audio locale unavailable: %s", locale))
+			}
 			fmt.Printf("! Audio locale %s is not available for episode %v, skipping it.\n", locale, info.EpisodeMetadata.EpisodeNumber)
 			continue
 		}
@@ -520,7 +545,7 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 	}
 	if len(versions) == 0 {
 		fmt.Printf("! None of the requested audio locales are available for episode %v, aborting this episode.\n", info.EpisodeMetadata.EpisodeNumber)
-		return
+		return failure("requested_audio_unavailable", "resolving", errors.New("none of the requested audio locales are available"))
 	}
 
 	fmt.Printf("Downloading: %s (S%02vE%02v) from %s\n", info.Title, info.EpisodeMetadata.SeasonNumber, info.EpisodeMetadata.EpisodeNumber, info.EpisodeMetadata.SeriesTitle)
@@ -537,6 +562,18 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 		activeStreams = map[string]string{}
 	)
 	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(error); ok {
+				err = e
+			} else {
+				err = failure("internal_error", "resolving", fmt.Errorf("%v", r))
+			}
+			if *debug {
+				fmt.Printf("Recovered from error: %v\n%s\n", r, runtimedebug.Stack())
+			}
+		}
+		err = operationFailure(err, "download_failed", "resolving")
+		events.setPhase("cleanup")
 		// Start the backoff clock as soon as this download is over, success or
 		// not, so a failed/rate-limited attempt doesn't get retried immediately.
 		backoff.done()
@@ -551,18 +588,7 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 		for id, sToken := range streams {
 			if err := deleteStream(id, sToken); err != nil {
 				fmt.Printf("Failed to remove the player stream for %s: %v\n", id, err)
-			}
-		}
-		if r := recover(); r != nil {
-			if e, ok := r.(error); ok {
-				err = e
-			} else {
-				err = fmt.Errorf("%v", r)
-			}
-			if *debug {
-				fmt.Printf("Recovered from error: %v\n%s\n", r, runtimedebug.Stack())
-			} else {
-				fmt.Printf("Recovered from error: %v\n", r)
+				events.warning("cleanup_failed", "The player stream could not be removed.")
 			}
 		}
 	}()
@@ -581,6 +607,7 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 		streamsMu.Lock()
 		activeStreams[version.contentId] = ep.Token
 		streamsMu.Unlock()
+		events.streamOpened()
 	}
 	if requestsAll(subsLangs) || requestsAll(ccLangs) {
 		// ALL covers the episode, including captions attached to dubs whose
@@ -641,6 +668,17 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 	subTracks := make([]mediaTrack, len(subJobs))
 	audioTracks := make([]mediaTrack, len(versions))
 	var videoFile string
+	// This runs after all workers join, on failure as well as success.
+	defer func() {
+		events.setPhase("cleanup")
+		removeTemporary(videoFile)
+		for _, track := range audioTracks {
+			removeTemporary(track.file)
+		}
+		for _, track := range subTracks {
+			removeTemporary(track.file)
+		}
+	}()
 
 	var (
 		wg       sync.WaitGroup
@@ -659,6 +697,7 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 		wg.Add(1)
 		go func(j int, job subJob) {
 			defer wg.Done()
+			defer recoverWorker(fail, "downloading")
 			file, err := downloadSubs(job.url, job.format)
 			if err != nil {
 				fail(fmt.Errorf("downloading subtitles for %s: %w", trackTitle(job.locale), err))
@@ -672,6 +711,7 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 		wg.Add(1)
 		go func(i int, version audioVersion) {
 			defer wg.Done()
+			defer recoverWorker(fail, "resolving")
 
 			episode := episodes[i]
 
@@ -711,41 +751,49 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 				}
 				videoCh := make(chan trackResult, 1)
 				go func() {
-					file, err := downloadVideoTrack(manifest, sets, *videoQuality, keys)
-					videoCh <- trackResult{file, err}
+					var result trackResult
+					defer func() { videoCh <- result }()
+					defer recoverWorker(func(err error) { result.err = err }, "downloading")
+					result.file, result.err = downloadVideoTrack(manifest, sets, *videoQuality, keys)
+				}()
+				// Even a panic in audio must join the video worker before cleanup.
+				joined := false
+				defer func() {
+					if !joined {
+						video := <-videoCh
+						videoFile = video.file
+					}
 				}()
 
 				audioFile, err := downloadAudioTrack(manifest, sets, version.locale, *audioQuality, keys)
 				if err != nil {
 					// Join the video download before unwinding so its progress
 					// bar can't race the deferred cleanup.
-					<-videoCh
-					fail(err)
+					video := <-videoCh
+					joined, videoFile = true, video.file
+					fail(operationFailure(err, "download_failed", "downloading"))
 					return
 				}
 				audioTracks[i] = mediaTrack{file: audioFile, locale: version.locale}
 
 				video := <-videoCh
+				joined, videoFile = true, video.file
 				if video.err != nil {
-					fail(video.err)
+					fail(operationFailure(video.err, "download_failed", "downloading"))
 					return
 				}
 				videoFile = video.file
 			} else {
 				audioFile, err := downloadAudioTrack(manifest, sets, version.locale, *audioQuality, keys)
 				if err != nil {
-					fail(err)
+					fail(operationFailure(err, "download_failed", "downloading"))
 					return
 				}
 				audioTracks[i] = mediaTrack{file: audioFile, locale: version.locale}
 			}
 
-			if err := deleteStream(version.contentId, episode.Token); err != nil {
-				fmt.Printf("Failed to remove the player stream for %s: %v\n", version.locale, err)
-			}
-			streamsMu.Lock()
-			delete(activeStreams, version.contentId)
-			streamsMu.Unlock()
+			// Playback tokens are released by the episode's cleanup defer, after
+			// all transfers and output writes have finished.
 		}(i, version)
 	}
 
@@ -765,27 +813,57 @@ func downloadEpisode(baseContentId string, info EpisodeInfo, audioLangs, subsLan
 // with a growing delay whenever Crunchyroll rate-limits the account, instead
 // of moving on to the next episode and immediately tripping the same rate
 // limit again.
-func downloadEpisodeWithRetry(baseContentId string, info EpisodeInfo, audioLangs, subsLangs, ccLangs []string, videoQuality, audioQuality *string) {
+func downloadEpisodeWithRetry(baseContentId string, info EpisodeInfo, audioLangs, subsLangs, ccLangs []string, videoQuality, audioQuality *string) error {
+	return retryEpisode(func() error {
+		return downloadEpisode(baseContentId, info, audioLangs, subsLangs, ccLangs, videoQuality, audioQuality)
+	})
+}
+
+func runAttempt(download func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(error); ok {
+				err = e
+			} else {
+				err = failure("internal_error", "resolving", fmt.Errorf("%v", r))
+			}
+		}
+		err = operationFailure(err, "download_failed", "resolving")
+	}()
+	return download()
+}
+
+func retryEpisode(download func() error) error {
 	for {
-		err := downloadEpisode(baseContentId, info, audioLangs, subsLangs, ccLangs, videoQuality, audioQuality)
+		events.startAttempt()
+		events.setPhase("resolving")
+		err := runAttempt(download)
 		if err == nil {
 			backoff.resetRateLimit()
-			return
+			return nil
 		}
 		if !errors.Is(err, ErrRateLimited) {
-			return
+			return err
 		}
 
 		wait := backoff.rateLimitWait()
+		events.retry(wait)
 		retryAt := time.Now().Add(wait)
 		fmt.Printf("Retrying this episode in %s [%s]...\n", wait.Round(time.Second), retryAt.Local().Format(time.Kitchen))
-		time.Sleep(wait)
+		if backoff != nil {
+			backoff.sleep(wait)
+		} else {
+			time.Sleep(wait)
+		}
 	}
 }
 
-func downloadSeason(videoQuality, audioQuality *string, audioLangs, subsLangs, ccLangs []string, episodes []SeasonEpisode) {
+func downloadSeason(videoQuality, audioQuality *string, audioLangs, subsLangs, ccLangs []string, episodes []SeasonEpisode) error {
+	if len(episodes) == 0 {
+		return failure("input_failed", "resolving", errors.New("season has no episodes"))
+	}
 	fmt.Printf("Downloading season %v of %s (%v episodes)\n\n", episodes[0].SeasonNumber, episodes[0].SeriesTitle, len(episodes))
-
+	var failures error
 	for _, episode := range episodes {
 		info := EpisodeInfo{
 			EpisodeMetadata: EpisodeMetadata{
@@ -799,6 +877,25 @@ func downloadSeason(videoQuality, audioQuality *string, audioLangs, subsLangs, c
 			Title: episode.Title,
 		}
 
-		downloadEpisodeWithRetry(episode.ID, info, audioLangs, subsLangs, ccLangs, videoQuality, audioQuality)
+		if err := downloadEpisodeWithRetry(episode.ID, info, audioLangs, subsLangs, ccLangs, videoQuality, audioQuality); err != nil {
+			failures = errors.Join(failures, err)
+		}
+	}
+	return failures
+}
+
+func recoverWorker(fail func(error), phase string) {
+	if r := recover(); r != nil {
+		fail(failure("internal_error", phase, fmt.Errorf("worker panic: %v", r)))
+	}
+}
+
+func removeTemporary(path string) {
+	if path == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		events.warning("cleanup_failed", "A temporary media file could not be removed.")
+		fmt.Fprintf(os.Stderr, "Temporary file cleanup failed: %v\n", err)
 	}
 }

@@ -1,0 +1,5 @@
+{"elapsed_ms":0,"event":"protocol","protocol":"cva-downloader-progress","sequence":0,"tool":"crunchyroll-downloader","version":1}
+{"elapsed_ms":0,"event":"phase","phase":"initializing","protocol":"cva-downloader-progress","sequence":1,"version":1}
+{"elapsed_ms":0,"event":"phase","phase":"authenticating","protocol":"cva-downloader-progress","sequence":2,"version":1}
+{"auth_step":"checking_session","display_message":"Checking saved sign-in...","elapsed_ms":0,"event":"phase","phase":"authenticating","protocol":"cva-downloader-progress","sequence":3,"version":1}
+{"attempt":1,"code":"credential_storage_failed","display_message":"the CVA credential vault is locked; check the mounted unlock key using CVA's vault documentation","elapsed_ms":0,"event":"failed","phase":"authenticating","protocol":"cva-downloader-progress","reason":"credential_locked","sequence":4,"version":1}

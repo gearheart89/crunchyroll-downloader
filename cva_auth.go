@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,7 @@ var accessTokenProvider = func() (string, error) { return GetAccessToken(*etpRt)
 
 type cvaAuthOptions struct {
 	Root, Python, SourceURL string
+	SaveCookie              bool
 }
 
 func findCVARoot(explicit string) (string, error) {
@@ -49,18 +51,18 @@ func findCVARoot(explicit string) (string, error) {
 }
 
 func newAccessTokenProvider(cookie string, options cvaAuthOptions) (func() (string, error), error) {
-	if cookie != "" {
+	if cookie != "" && !options.SaveCookie {
 		return func() (string, error) { return GetAccessToken(cookie) }, nil
 	}
 	options, err := resolveCVAOptions(options)
 	if err != nil {
 		return nil, err
 	}
-	return func() (string, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		return getCVAToken(ctx, options)
-	}, nil
+	var explicit *storedSession
+	if cookie != "" {
+		explicit = &storedSession{Cookie: cookie, DeviceID: deviceId}
+	}
+	return newSessionTokenProvider(options, explicit).token, nil
 }
 
 func resolveCVAOptions(options cvaAuthOptions) (cvaAuthOptions, error) {
@@ -120,17 +122,25 @@ func checkCVACredentials(options cvaAuthOptions) (string, error) {
 }
 
 func runCVAHelper(ctx context.Context, options cvaAuthOptions, operation string) ([]byte, error) {
-	input, _ := json.Marshal(map[string]string{"source_url": options.SourceURL, "operation": operation})
+	return runCVAHelperRequest(ctx, options, map[string]any{"operation": operation})
+}
+
+func runCVAHelperRequest(ctx context.Context, options cvaAuthOptions, request map[string]any) ([]byte, error) {
+	request["source_url"] = options.SourceURL
+	input, err := json.Marshal(request)
+	if err != nil {
+		return nil, errors.New("invalid authentication helper request")
+	}
 	// The embedded helper contains no credentials. Account/password stay inside
-	// Python; the bearer is returned only through the child's private pipe.
+	// Python; bearer/session exchange uses only the child's private pipes.
 	cmd := exec.CommandContext(ctx, options.Python, "-I", "-B", "-c", cvaAuthScript, options.Root)
 	cmd.Stdin = bytes.NewReader(input)
 	var output boundedOutput
 	cmd.Stdout = &output
 	cmd.Stderr = io.Discard
-	err := cmd.Run()
+	err = cmd.Run()
 	if ctx.Err() != nil {
-		return nil, errors.New("CVA authentication helper timed out or was cancelled; no credentials were changed")
+		return nil, errors.New("CVA authentication helper timed out or was cancelled; session storage may need to be checked")
 	}
 	if err != nil {
 		return nil, errors.New("CVA authentication helper could not run; check --cva-python and the CVA dependencies")
@@ -179,30 +189,54 @@ func decodeCVAToken(data []byte) (string, error) {
 	return "", cvaStatusError(result.Status)
 }
 
-func cvaStatusError(status string) error {
-	messages := map[string]string{
-		"dependencies":                "CVA modules or dependencies are unavailable; check --cva-root and --cva-python",
-		"credentials_missing":         "no CVA credentials are stored; add them using CVA's credential manager",
-		"credential_config":           "invalid CVA credential configuration; check CVA_CREDENTIAL_BACKEND, CVA_CONTAINER, CVA_CREDENTIAL_VAULT_PATH and CVA_CREDENTIAL_KEY_PATH",
-		"credential_unavailable":      "the selected CVA credential store is unavailable; check its dependencies, mounted files, ownership and permissions",
-		"credential_locked":           "the CVA credential vault is locked; check the mounted unlock key using CVA's vault documentation",
-		"credential_corrupt":          "the CVA credential vault is corrupt or unsupported; repair or restore it through CVA before retrying",
-		"credential_store":            "CVA credentials could not be accessed; check the selected store using CVA's credential manager",
-		"bad_credentials":             "Crunchyroll rejected the stored credentials; update them using CVA's credential manager",
-		"interaction_required":        "Crunchyroll requires interactive sign-in; use the browser cookie option (--etp-rt) for this run",
-		"verification_required":       "Crunchyroll requires human verification; complete sign-in in your browser and use --etp-rt for this run",
-		"source":                      "CVA authentication requires a valid HTTPS Crunchyroll series or watch URL",
-		"configuration":               "CVA could not load Crunchyroll's sign-in configuration",
-		"runtime":                     "CVA could not start or close the dedicated Chrome runtime; check CVA's Windows/Chrome requirements",
-		"browser_runtime_unsupported": "CVA credential selection succeeded, but this bridge's browser sign-in runtime requires Windows; use --etp-rt on this platform",
-		"network_error":               "CVA sign-in encountered a network error",
-		"site_error":                  "Crunchyroll sign-in is temporarily unavailable",
-		"auth_flow_changed":           "CVA could not recognize Crunchyroll's current sign-in flow",
-		"profile_error":               "CVA could not use the downloader's dedicated browser profile",
+// These allowlisted statuses are also the optional JSON failure reasons.
+// Keep messages static: helper output must never become UI text.
+var cvaStatusMessages = map[string]string{
+	"session_rejected":            "Crunchyroll rejected the session cookie. Supply a fresh cookie or renew sign-in before retrying.",
+	"session_invalid":             "the stored or returned downloader session is invalid; replace it with a valid cookie using --etp-rt and --save-cookie",
+	"session_unavailable":         "sign-in did not provide a usable downloader session cookie",
+	"session_refresh_unsupported": "A usable saved sign-in is unavailable. Automatic browser renewal currently requires Windows. Supply a fresh cookie with --etp-rt and --save-cookie on this platform.",
+	"dependencies":                "CVA modules or dependencies are unavailable; check --cva-root and --cva-python",
+	"credentials_missing":         "no CVA credentials are stored; add them using CVA's credential manager",
+	"credential_config":           "invalid CVA credential configuration; check CVA_CREDENTIAL_BACKEND, CVA_CONTAINER, CVA_CREDENTIAL_VAULT_PATH and CVA_CREDENTIAL_KEY_PATH",
+	"credential_unavailable":      "the selected CVA credential store is unavailable; check its dependencies, mounted files, ownership and permissions",
+	"credential_locked":           "the CVA credential vault is locked; check the mounted unlock key using CVA's vault documentation",
+	"credential_corrupt":          "the CVA credential vault is corrupt or unsupported; repair or restore it through CVA before retrying",
+	"credential_store":            "CVA credentials could not be accessed; check the selected store using CVA's credential manager",
+	"bad_credentials":             "Crunchyroll rejected the stored credentials; update them using CVA's credential manager",
+	"interaction_required":        "Crunchyroll requires interactive sign-in; use the browser cookie option (--etp-rt) for this run",
+	"verification_required":       "Crunchyroll requires human verification; complete sign-in in your browser and use --etp-rt for this run",
+	"source":                      "CVA authentication requires a valid HTTPS Crunchyroll series or watch URL",
+	"configuration":               "CVA could not load Crunchyroll's sign-in configuration",
+	"runtime":                     "CVA could not start or close the dedicated Chrome runtime; check CVA's Windows/Chrome requirements",
+	"browser_runtime_unsupported": "CVA credential selection succeeded, but this bridge's browser sign-in runtime requires Windows; use --etp-rt on this platform",
+	"network_error":               "CVA sign-in encountered a network error",
+	"site_error":                  "Crunchyroll sign-in is temporarily unavailable",
+	"auth_flow_changed":           "CVA could not recognize Crunchyroll's current sign-in flow",
+	"profile_error":               "CVA could not use the downloader's dedicated browser profile",
+}
+
+func cvaFailureDetail(status string) (code, message string, known bool) {
+	if message, ok := cvaStatusMessages[status]; ok {
+		code := "authentication_failed"
+		if strings.HasPrefix(status, "credential") {
+			code = "credential_storage_failed"
+		}
+		if status == "session_invalid" {
+			code = "credential_storage_failed"
+		}
+		if status == "dependencies" || status == "configuration" || status == "source" {
+			code = "sign_in_configuration_failed"
+		}
+		return code, message, true
 	}
-	if message, ok := messages[status]; ok {
-		return errors.New(message)
+	return "", "", false
+}
+
+func cvaStatusError(status string) error {
+	if code, message, known := cvaFailureDetail(status); known {
+		return &operationError{code: code, phase: "authenticating", reason: status, err: errors.New(message)}
 	}
 	// Never reflect helper data (including unknown statuses) into diagnostics.
-	return errors.New("CVA authentication failed; no credentials were changed")
+	return errors.New("CVA authentication failed; the helper returned an unsupported result")
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -46,14 +47,19 @@ type progressBar struct {
 	total   int64
 	current int64
 	samples []byteSample // recent (time, bytes) observations for the rate
+	track   trackIdentity
 }
 
 // newProgressBar registers a bar for a download. Callers that do not know the
 // total until after the first response may pass 0 and use setTotal later.
-func newProgressBar(title string, total int64, label string) *progressBar {
+func newProgressBar(title string, total int64, label string, tracks ...trackIdentity) *progressBar {
 	progressRenderer.mu.Lock()
 	defer progressRenderer.mu.Unlock()
 	b := &progressBar{title: title, total: total, label: label}
+	if len(tracks) > 0 {
+		b.track = tracks[0]
+	}
+	b.report(false)
 	progressRenderer.bars = append(progressRenderer.bars, b)
 	renderLocked()
 	return b
@@ -87,7 +93,26 @@ func (b *progressBar) update(current, bytes int64) {
 	}
 	b.current = current
 	b.recordBytes(bytes)
+	b.report(false)
 	renderLocked()
+}
+
+func (b *progressBar) report(complete bool) {
+	rate := math.NaN()
+	if len(b.samples) >= 2 {
+		rate = b.rateMbps()
+	}
+	events.progress(b.track, b.current, b.total, b.label == "segments", complete, rate)
+}
+
+// finish also runs on transfer errors; only transferred may report 100%.
+func (b *progressBar) transferred() {
+	progressRenderer.mu.Lock()
+	defer progressRenderer.mu.Unlock()
+	if b.total > 0 {
+		b.current = b.total
+	}
+	b.report(true)
 }
 
 // finish removes the bar from the display, leaving the remaining bars redrawn.
@@ -173,6 +198,9 @@ func (b *progressBar) renderLine(titleWidth int) string {
 // renderLocked rewrites every bar on its own line, moving the cursor back over
 // the previous frame first. It must be called with progressRenderer.mu held.
 func renderLocked() {
+	if events != nil {
+		return
+	}
 	titleWidth := 0
 	for _, b := range progressRenderer.bars {
 		if w := displayWidth(b.title); w > titleWidth {

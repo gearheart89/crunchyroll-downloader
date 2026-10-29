@@ -71,10 +71,7 @@ func TestDecodeCVACredentialCheck(t *testing.T) {
 }
 
 func TestCVACredentialCheckInvokesHelperWithConfiguration(t *testing.T) {
-	python, err := exec.LookPath("python")
-	if err != nil {
-		t.Skip("Python is required for the bridge process test")
-	}
+	python := testPython(t)
 	root := t.TempDir()
 	packagePath := filepath.Join(root, "crunchyroll_video_analyzer")
 	if err := os.Mkdir(packagePath, 0700); err != nil {
@@ -172,10 +169,7 @@ func TestDoRequestUsesSelectedProvider(t *testing.T) {
 }
 
 func TestCVAHelperProtocol(t *testing.T) {
-	python, err := exec.LookPath("python")
-	if err != nil {
-		t.Skip("Python is required for the bridge process test")
-	}
+	python := testPython(t)
 	oldScript := cvaAuthScript
 	t.Cleanup(func() { cvaAuthScript = oldScript })
 	options := cvaAuthOptions{Python: python, Root: t.TempDir(), SourceURL: "https://www.crunchyroll.com/series/FIXTURE"}
@@ -201,6 +195,17 @@ func TestCVAHelperProtocol(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testPython(t *testing.T) string {
+	t.Helper()
+	for _, name := range []string{"python", "python3"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path
+		}
+	}
+	t.Skip("Python is required for the bridge process test")
+	return ""
 }
 
 func TestInputURLs(t *testing.T) {

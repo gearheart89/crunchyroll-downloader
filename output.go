@@ -43,7 +43,11 @@ func muxArgs(videoFile string, audioTracks, subTracks []mediaTrack, outputFile s
 	if mp4 {
 		subTracks = nil
 	}
-	args := []string{"-nostdin", "-y", "-i", videoFile}
+	// Keep the packet timeline shared by the downloaded tracks. Independently
+	// rebasing inputs using FFmpeg's reported start_time can create seconds of
+	// A/V skew for fragmented AAC with an edit list and a non-sample-rate clock
+	// (e.g. a 10 MHz media timescale). Do not guess an episode-specific offset.
+	args := []string{"-nostdin", "-y", "-copyts", "-i", videoFile}
 	for _, audio := range audioTracks {
 		args = append(args, "-i", audio.file)
 	}
@@ -139,20 +143,24 @@ func muxArgs(videoFile string, audioTracks, subTracks []mediaTrack, outputFile s
 // is complete. The MP4 itself contains video and audio; subtitles remain intact.
 func mergeEverything(videoFile string, audioTracks, subTracks []mediaTrack, outputFile string, info EpisodeInfo) {
 	if err := writeOutput(videoFile, audioTracks, subTracks, outputFile, info); err != nil {
-		panic(err)
+		panic(operationFailure(err, "output_configuration_failed", "finalizing"))
 	}
 
-	_ = os.Remove(videoFile)
+	events.setPhase("cleanup")
+	removeTemporary(videoFile)
 	for _, audio := range audioTracks {
-		_ = os.Remove(audio.file)
+		removeTemporary(audio.file)
 	}
 	for _, sub := range subTracks {
-		_ = os.Remove(sub.file)
+		removeTemporary(sub.file)
 	}
 	fmt.Printf("\nDownload finished! Output file: %s\n\n", outputFile)
 }
 
 func writeOutput(videoFile string, audioTracks, subTracks []mediaTrack, outputFile string, info EpisodeInfo) (err error) {
+	if events != nil {
+		subTracks = nil
+	}
 	if _, err := os.Lstat(outputFile); err == nil {
 		return fmt.Errorf("output already exists: %s", outputFile)
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -165,7 +173,12 @@ func writeOutput(videoFile string, audioTracks, subTracks []mediaTrack, outputFi
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(stage)
+	defer func() {
+		if cleanupErr := os.RemoveAll(stage); cleanupErr != nil {
+			events.warning("cleanup_failed", "The temporary output directory could not be removed.")
+			fmt.Fprintf(os.Stderr, "Output staging cleanup failed: %v\n", cleanupErr)
+		}
+	}()
 	stagedVideo := filepath.Join(stage, filepath.Base(outputFile))
 	var sidecars []subtitleSidecar
 	if strings.EqualFold(filepath.Ext(outputFile), ".mp4") {
@@ -178,8 +191,15 @@ func writeOutput(videoFile string, audioTracks, subTracks []mediaTrack, outputFi
 	cmd := exec.Command(ffmpegPath, muxArgs(videoFile, audioTracks, subTracks, stagedVideo, info)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	events.setPhase("muxing")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ffmpeg failed: %w\n%s", err, stderr.String())
+		return failure("ffmpeg_failed", "muxing", fmt.Errorf("ffmpeg failed: %w\n%s", err, stderr.String()))
+	}
+	events.setPhase("finalizing")
+	if stat, statErr := os.Stat(stagedVideo); statErr != nil {
+		return failure("output_validation_failed", "finalizing", statErr)
+	} else if !stat.Mode().IsRegular() || stat.Size() == 0 {
+		return failure("output_validation_failed", "finalizing", fmt.Errorf("FFmpeg did not produce a nonempty regular file"))
 	}
 
 	// Roll back only the sidecars created by this attempt. Never overwrite an
@@ -251,19 +271,14 @@ func planSubtitleSidecars(outputFile string, tracks []mediaTrack) ([]subtitleSid
 		if err != nil {
 			return nil, err
 		}
-		flags := ""
-		if track.forced {
-			flags += ".forced"
-		}
-		if track.isCC {
-			flags += ".cc"
-		}
 		var path string
+		// External filenames contain only the media basename, language, and
+		// original extension. Track roles do not add filename suffixes.
 		// If both language aliases are already occupied, Plex also supports
 		// a sibling "subtitles" directory (Plex Media Server 1.41.0+).
 		for _, stem := range []string{base, filepath.Join(filepath.Dir(base), "subtitles", filepath.Base(base))} {
 			for _, code := range codes {
-				candidate := stem + "." + code + flags + "." + ext
+				candidate := stem + "." + code + "." + ext
 				if !used[strings.ToLower(candidate)] {
 					path = candidate
 					break
@@ -274,7 +289,7 @@ func planSubtitleSidecars(outputFile string, tracks []mediaTrack) ([]subtitleSid
 			}
 		}
 		if path == "" {
-			return nil, fmt.Errorf("Plex subtitle filename collision for %s: select fewer regional variants of this language/format", track.locale)
+			return nil, fmt.Errorf("Plex subtitle filename collision for %s: select fewer tracks of this language/format", track.locale)
 		}
 		used[strings.ToLower(path)] = true
 		sidecars = append(sidecars, subtitleSidecar{source: track.file, path: path, locale: track.locale})

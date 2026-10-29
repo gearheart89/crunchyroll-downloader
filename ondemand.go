@@ -150,6 +150,7 @@ func selectOnDemandRepresentation(set onDemandAdaptationSet, quality string, isV
 		kind = "Video"
 	}
 	fmt.Printf("%s quality %s not found, deferring to %s\n", kind, quality, first.ID)
+	events.warning("nonfatal_output_warning", "The requested quality is unavailable; using an available representation.")
 	return first, true
 }
 
@@ -168,11 +169,11 @@ func onDemandRequest(url, byteRange string) (*http.Response, error) {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, failure("network_failed", "downloading", err)
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		resp.Body.Close()
-		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+		return nil, failure("response_failed", "downloading", fmt.Errorf("unexpected status %d", resp.StatusCode))
 	}
 	return resp, nil
 }
@@ -183,7 +184,8 @@ func downloadRange(url string, start, end int64) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	return data, failure("body_read_failed", "downloading", err)
 }
 
 // responseRange reports the total size of the resource and the byte offset at
@@ -236,13 +238,13 @@ func streamRange(w io.Writer, url string, start int64, onProgress func(current, 
 
 	total, base, known := responseRange(resp)
 	if !known {
-		_, err = io.Copy(w, resp.Body)
+		_, err = io.Copy(w, &responseBodyReader{resp.Body})
 		return err
 	}
 
 	var done int64
 	reader := &countingReader{
-		r: resp.Body,
+		r: &responseBodyReader{resp.Body},
 		onRead: func(n int) {
 			done += int64(n)
 			if onProgress != nil {
@@ -270,7 +272,7 @@ func tempMediaFile(isVideo bool) string {
 
 // downloadOnDemandAdaptation finds the requested video or audio adaptation set,
 // selects a representation and downloads it.
-func downloadOnDemandAdaptation(title string, sets []onDemandAdaptationSet, isVideo bool, quality string, keys []*widevine.Key) (string, error) {
+func downloadOnDemandAdaptation(title string, sets []onDemandAdaptationSet, isVideo bool, quality string, keys []*widevine.Key, tracks ...trackIdentity) (string, error) {
 	var chosen *onDemandAdaptationSet
 	for i := range sets {
 		if sets[i].IsVideo == isVideo {
@@ -287,7 +289,7 @@ func downloadOnDemandAdaptation(title string, sets []onDemandAdaptationSet, isVi
 		return "", fmt.Errorf("no %s representation available", videoOrAudio(isVideo))
 	}
 
-	return downloadOnDemandParts(title, rep, isVideo, keys)
+	return downloadOnDemandParts(title, rep, isVideo, keys, tracks...)
 }
 
 func videoOrAudio(isVideo bool) string {
@@ -300,7 +302,7 @@ func videoOrAudio(isVideo bool) string {
 // downloadOnDemandParts downloads a single-file representation: the initialization
 // range for key selection, then the remainder of the file (from the start of the
 // index range to EOF) streamed to disk, then decrypts the whole thing.
-func downloadOnDemandParts(title string, rep onDemandRepresentation, isVideo bool, keys []*widevine.Key) (string, error) {
+func downloadOnDemandParts(title string, rep onDemandRepresentation, isVideo bool, keys []*widevine.Key, tracks ...trackIdentity) (result string, err error) {
 	initStart, initEnd, err := parseByteRange(rep.InitRange)
 	if err != nil {
 		return "", fmt.Errorf("parse init range: %w", err)
@@ -316,19 +318,27 @@ func downloadOnDemandParts(title string, rep onDemandRepresentation, isVideo boo
 	}
 
 	filename := tempMediaFile(isVideo)
+	if filename == "" {
+		return "", fmt.Errorf("could not create temporary media file")
+	}
+	defer func() {
+		if result == "" {
+			removeTemporary(filename)
+		}
+	}()
 	encPath := filename + ".enc"
 	encFile, err := os.Create(encPath)
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(encPath)
+	defer removeTemporary(encPath)
 	defer encFile.Close()
 
 	if _, err = encFile.Write(initData); err != nil {
 		return "", fmt.Errorf("writing init segment: %w", err)
 	}
 
-	bar := newProgressBar(title, 0, "")
+	bar := newProgressBar(title, 0, "", tracks...)
 	if err = streamRange(encFile, rep.BaseURL, indexStart, func(current, total int64) {
 		bar.setTotal(total)
 		bar.update(current, current)
@@ -337,6 +347,8 @@ func downloadOnDemandParts(title string, rep onDemandRepresentation, isVideo boo
 		return "", err
 	}
 	bar.finish()
+	bar.transferred()
+	events.setPhase("decrypting")
 
 	if _, err = encFile.Seek(0, io.SeekStart); err != nil {
 		return "", fmt.Errorf("rewinding %s: %w", encPath, err)
@@ -349,8 +361,21 @@ func downloadOnDemandParts(title string, rep onDemandRepresentation, isVideo boo
 	defer file.Close()
 
 	if err = decryptMP4(initData, encFile, keys, file); err != nil {
-		return "", fmt.Errorf("decryptMP4: %w", err)
+		return "", failure("decryption_failed", "decrypting", fmt.Errorf("decryptMP4: %w", err))
+	}
+	if err := file.Close(); err != nil {
+		return "", failure("decryption_failed", "decrypting", err)
 	}
 
 	return filename, nil
+}
+
+type responseBodyReader struct{ io.Reader }
+
+func (r *responseBodyReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if err != nil && err != io.EOF {
+		err = failure("body_read_failed", "downloading", err)
+	}
+	return n, err
 }

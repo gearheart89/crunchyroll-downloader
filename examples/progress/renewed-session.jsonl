@@ -1,0 +1,11 @@
+{"elapsed_ms":0,"event":"protocol","protocol":"cva-downloader-progress","sequence":0,"tool":"crunchyroll-downloader","version":1}
+{"elapsed_ms":0,"event":"phase","phase":"initializing","protocol":"cva-downloader-progress","sequence":1,"version":1}
+{"elapsed_ms":0,"event":"phase","phase":"authenticating","protocol":"cva-downloader-progress","sequence":2,"version":1}
+{"auth_step":"checking_session","display_message":"Checking saved sign-in...","elapsed_ms":0,"event":"phase","phase":"authenticating","protocol":"cva-downloader-progress","sequence":3,"version":1}
+{"auth_step":"refreshing_session","display_message":"Renewing sign-in...","elapsed_ms":0,"event":"phase","phase":"authenticating","protocol":"cva-downloader-progress","sequence":4,"version":1}
+{"auth_step":"validating_session","display_message":"Validating sign-in...","elapsed_ms":0,"event":"phase","phase":"authenticating","protocol":"cva-downloader-progress","sequence":5,"version":1}
+{"auth_step":"saving_session","display_message":"Saving sign-in securely...","elapsed_ms":0,"event":"phase","phase":"authenticating","protocol":"cva-downloader-progress","sequence":6,"version":1}
+{"auth_step":"authenticated","display_message":"Signed in successfully.","elapsed_ms":0,"event":"phase","phase":"authenticating","protocol":"cva-downloader-progress","sequence":7,"version":1}
+{"attempt":1,"elapsed_ms":0,"event":"attempt_started","protocol":"cva-downloader-progress","sequence":8,"version":1}
+{"elapsed_ms":0,"event":"phase","phase":"resolving","protocol":"cva-downloader-progress","sequence":9,"version":1}
+{"attempt":1,"elapsed_ms":0,"event":"skipped_existing","output_path":"/downloads/stage2/Example/Season 01/work-item.mp4","protocol":"cva-downloader-progress","sequence":10,"validation":"existence_only","version":1}

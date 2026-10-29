@@ -1,0 +1,5 @@
+{"elapsed_ms":0,"event":"protocol","protocol":"cva-downloader-progress","sequence":0,"tool":"crunchyroll-downloader","version":1}
+{"elapsed_ms":0,"event":"phase","phase":"initializing","protocol":"cva-downloader-progress","sequence":1,"version":1}
+{"elapsed_ms":0,"event":"phase","phase":"authenticating","protocol":"cva-downloader-progress","sequence":2,"version":1}
+{"auth_step":"validating_session","display_message":"Validating sign-in...","elapsed_ms":0,"event":"phase","phase":"authenticating","protocol":"cva-downloader-progress","sequence":3,"version":1}
+{"attempt":1,"code":"authentication_failed","display_message":"Crunchyroll rejected the session cookie. Supply a fresh cookie or renew sign-in before retrying.","elapsed_ms":0,"event":"failed","phase":"authenticating","protocol":"cva-downloader-progress","reason":"session_rejected","sequence":4,"version":1}

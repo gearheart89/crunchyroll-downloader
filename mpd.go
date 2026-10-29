@@ -18,20 +18,28 @@ func parseManifest(url string) (*mpd.MPD, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+currentAccessToken())
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, failure("network_failed", "resolving", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, failure("response_failed", "resolving", fmt.Errorf("manifest HTTP status %d", resp.StatusCode))
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, failure("body_read_failed", "resolving", err)
 	}
 	mpd := new(mpd.MPD)
-	mpd.Decode(body)
+	if err := mpd.Decode(body); err != nil {
+		return nil, nil, failure("response_failed", "resolving", err)
+	}
+	if len(mpd.Period) == 0 {
+		return nil, nil, failure("response_failed", "resolving", fmt.Errorf("manifest has no period"))
+	}
 
 	if *debug {
 		fmt.Printf("\n%s\n", string(body))
@@ -71,6 +79,7 @@ func getBaseUrl(set *mpd.AdaptationSet, isVideoSet bool, quality string) (*strin
 	}
 	firstRep := set.Representations[0]
 	fmt.Printf("Audio quality %s not found, deferring to %s\n", quality, *firstRep.ID)
+	events.warning("nonfatal_output_warning", "The requested quality is unavailable; using an available representation.")
 	return &firstRep.BaseURL[0].Value, firstRep.ID
 }
 

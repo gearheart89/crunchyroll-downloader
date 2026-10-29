@@ -37,16 +37,19 @@ func TestPlexSubtitleNames(t *testing.T) {
 		{locale: "zh-CN", format: "ass"},
 		{locale: "zh-HK", format: "ass"},
 		{locale: "zh-TW", format: "ass"},
+		{locale: "en-US", format: "srt", isCC: true},
+		{locale: "de-DE", format: "ass"},
 	}
 	got, err := planSubtitleSidecars(base+".mp4", tracks)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
-		base + ".en.srt", base + ".de.forced.ass", base + ".en.cc.vtt",
+		base + ".en.srt", base + ".de.ass", base + ".en.vtt",
 		base + ".es.ass", base + ".spa.ass", base + ".fr.ssa",
 		base + ".zh.ass", base + ".chi.ass",
 		filepath.Join(filepath.Dir(base), "subtitles", filepath.Base(base)+".zh.ass"),
+		base + ".eng.srt", base + ".ger.ass",
 	}
 	for i, sidecar := range got {
 		if sidecar.path != want[i] {
@@ -184,7 +187,12 @@ func TestOutputContainersWithFFmpeg(t *testing.T) {
 	for _, format := range []string{"mp4", "mkv"} {
 		t.Run(format, func(t *testing.T) {
 			dir := t.TempDir()
-			video, audio, subtitles := makeOutputInputs(t, ffmpeg, dir)
+			work := filepath.Join(dir, "work")
+			if err := os.MkdirAll(work, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(work)
+			video, audio, subtitles := makeOutputInputs(t, ffmpeg, work)
 			videoHashes := packetHashes(t, ffprobe, video, "v:0")
 			audioHashes := packetHashes(t, ffprobe, audio[0].file, "a:0")
 			var originalSubs [][]byte
@@ -195,7 +203,15 @@ func TestOutputContainersWithFFmpeg(t *testing.T) {
 				}
 				originalSubs = append(originalSubs, data)
 			}
-			output := filepath.Join(dir, "Example S01E01 - Pilot [1080p]."+format)
+			destination, filename, err := prepareOutputOptions("../Media/Season 01", "Custom S01E01 - Pilot [1080p]", format,
+				[]string{"https://www.crunchyroll.com/watch/TEST/episode"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := episodeOutputPath(EpisodeInfo{}, "1080p", destination, filename, format)
+			if err != nil {
+				t.Fatal(err)
+			}
 			mergeEverything(video, audio, subtitles, output, EpisodeInfo{})
 			var probe outputProbe
 			if err := json.Unmarshal(runMediaTool(t, ffprobe, "-v", "error", "-show_streams", "-of", "json", output), &probe); err != nil {
@@ -252,7 +268,7 @@ func TestFailedOutputPreservesInputsAndExistingSidecars(t *testing.T) {
 	dir := t.TempDir()
 	video, audio, subtitles := makeOutputInputs(t, ffmpeg, dir)
 	output := filepath.Join(dir, "Episode.mp4")
-	protected := filepath.Join(dir, "Episode.en.cc.vtt")
+	protected := filepath.Join(dir, "Episode.en.vtt")
 	if err := os.WriteFile(protected, []byte("user's existing subtitle"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +276,7 @@ func TestFailedOutputPreservesInputsAndExistingSidecars(t *testing.T) {
 		t.Fatal("expected conflicting sidecar error")
 	}
 	assertOutputBytes(t, protected, []byte("user's existing subtitle"))
-	for _, path := range []string{output, filepath.Join(dir, "Episode.de.forced.ass")} {
+	for _, path := range []string{output, filepath.Join(dir, "Episode.de.ass")} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("partial output left behind: %s", path)
 		}

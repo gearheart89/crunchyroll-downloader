@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -17,9 +18,45 @@ func useTokenServer(t *testing.T, handler http.HandlerFunc) {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	oldURL, oldToken := tokenURL, token
+	oldURL, oldToken, oldCookie := tokenURL, token, *etpRt
 	tokenURL = srv.URL
-	t.Cleanup(func() { tokenURL, token = oldURL, oldToken })
+	*etpRt = "fixture-cookie"
+	t.Cleanup(func() { tokenURL, token, *etpRt = oldURL, oldToken, oldCookie })
+}
+
+func TestConcurrentRequestsShareBearerRefresh(t *testing.T) {
+	oldProvider, oldToken := accessTokenProvider, token
+	t.Cleanup(func() { accessTokenProvider, token = oldProvider, oldToken })
+	token = "fixture-old"
+	var renewals atomic.Int32
+	accessTokenProvider = func() (string, error) { renewals.Add(1); return "fixture-fresh", nil }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fixture-fresh" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+			req.Header.Set("Authorization", "Bearer fixture-old")
+			resp, err := DoRequest(req)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			resp.Body.Close()
+		}()
+	}
+	wg.Wait()
+	if renewals.Load() != 1 {
+		t.Fatalf("concurrent workers refreshed %d times", renewals.Load())
+	}
 }
 
 func TestGetAccessToken(t *testing.T) {

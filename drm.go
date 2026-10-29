@@ -105,7 +105,7 @@ func sendChallenge(contentId, videoToken string, challenge []byte) ([]byte, erro
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Cr-Content-Id", contentId)
 	req.Header.Set("X-Cr-Video-Token", videoToken)
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+currentAccessToken())
 	req.Header.Set("Origin", "https://static.crunchyroll.com")
 	req.Header.Set("Referer", "https://static.crunchyroll.com/")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0")
@@ -118,16 +118,16 @@ func sendChallenge(contentId, videoToken string, challenge []byte) ([]byte, erro
 	// Parse JSON response
 	res, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, failure("body_read_failed", "resolving", err)
 	}
 	var result CrunchyrollWidevineLicenseResponse
 	if err = json.Unmarshal(res, &result); err != nil {
-		return nil, err
+		return nil, failure("response_failed", "resolving", err)
 	}
 
 	decoded, err := base64.StdEncoding.DecodeString(result.License)
 	if err != nil {
-		return nil, err
+		return nil, failure("response_failed", "resolving", err)
 	}
 
 	return decoded, nil

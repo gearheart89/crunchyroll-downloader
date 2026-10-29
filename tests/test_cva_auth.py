@@ -4,6 +4,7 @@ import contextlib
 from enum import Enum
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -237,8 +238,153 @@ class CredentialSelectionTests(unittest.TestCase):
         self.api.default_credential_store.assert_not_called()
 
 
+SESSION = {"cookie": "fixture-cookie-secret", "device_id": "fixture-device", "expires_at": 0}
+
+
+class SessionStorageTests(unittest.TestCase):
+    def setUp(self):
+        self.account = Mock()
+        self.account.vault_path = Path(tempfile.gettempdir()).resolve() / "credentials.vault"
+        self.account.key_path = self.account.vault_path.with_name("fixture.key")
+        self.session = Mock()
+        self.session.get.return_value = None
+        self.api = credential_api(self.account)
+        self.api.KeyringCredentialStore = Mock(return_value=self.session)
+        self.api.ContainerCredentialVault = Mock(return_value=self.session)
+        self.api.CrunchyrollCredentials = lambda account, password: SimpleNamespace(account=account, password=password)
+
+    def run_bridge(self, request):
+        with patch.object(bridge, "load_cva", return_value=self.api):
+            return bridge.run(ROOT, request)
+
+    def test_keyring_session_has_its_own_namespace(self):
+        result = self.run_bridge({"operation": "session-write", "session": SESSION})
+        self.assertEqual(result, {"status": "session_saved"})
+        self.api.KeyringCredentialStore.assert_called_once_with(service=bridge.SESSION_SERVICE)
+        pair = self.session.set.call_args.args[0]
+        self.assertEqual(pair.account, bridge.SESSION_SCHEMA)
+        self.assertEqual(json.loads(pair.password), SESSION)
+        self.account.get.assert_not_called()
+        self.account.set.assert_not_called()
+        self.account.delete.assert_not_called()
+
+    def test_container_session_reuses_cva_vault_with_separate_path_and_same_key(self):
+        self.api.select_credential_store.return_value = SimpleNamespace(runtime=RuntimeKind.CONTAINER, store=SimpleNamespace(value="container_vault"))
+        self.assertEqual(self.run_bridge({"operation": "session-write", "session": SESSION}), {"status": "session_saved"})
+        self.api.ContainerCredentialVault.assert_called_once_with(
+            self.account.vault_path.with_name("credentials.vault.downloader-session"), self.account.key_path)
+        self.api.KeyringCredentialStore.assert_not_called()
+        self.account.set.assert_not_called()
+
+    def test_session_read_needs_no_browser_or_account_password(self):
+        self.session.get.return_value = SimpleNamespace(account=bridge.SESSION_SCHEMA, password=json.dumps(SESSION))
+        with patch.object(bridge, "load_browser_api", side_effect=AssertionError("no browser")):
+            self.assertEqual(self.run_bridge({"operation": "session-read"}), {"status": "session_ok", "session": SESSION})
+        self.account.get.assert_not_called()
+        self.session.set.assert_not_called()
+        self.session.get.return_value = None
+        self.assertEqual(self.run_bridge({"operation": "session-read"}), {"status": "session_missing"})
+
+    def test_storage_errors_are_sanitized_and_never_delete_cache(self):
+        for error, status in [(Locked("fixture-cookie-secret"), "credential_locked"), (Corrupt("fixture-cookie-secret"), "credential_corrupt"), (Unavailable("fixture-cookie-secret"), "credential_unavailable"), (RuntimeError("fixture-cookie-secret"), "credential_store")]:
+            with self.subTest(status=status):
+                self.session.get.side_effect = error
+                self.assertEqual(self.run_bridge({"operation": "session-read"}), {"status": status})
+                self.session.set.side_effect = error
+                self.assertEqual(self.run_bridge({"operation": "session-write", "session": SESSION}), {"status": status})
+                self.session.delete.assert_not_called()
+
+    def test_malformed_cache_is_not_returned_or_silently_replaced(self):
+        for pair in [SimpleNamespace(account="wrong", password=json.dumps(SESSION)), SimpleNamespace(account=bridge.SESSION_SCHEMA, password="fixture-cookie-secret")]:
+            self.session.get.return_value = pair
+            self.assertEqual(self.run_bridge({"operation": "session-read"}), {"status": "session_invalid"})
+        self.session.set.assert_not_called()
+        for changes in [{"cookie": "fixture\r\nsecret"}, {"cookie": "fixture;secret"}, {"device_id": ""}, {"expires_at": -1}, {"expires_at": float("inf")}, {"expires_at": True}]:
+            self.assertEqual(self.run_bridge({"operation": "session-write", "session": dict(SESSION, **changes)}), {"status": "session_invalid"})
+        self.session.set.assert_not_called()
+
+    def test_refresh_does_not_save_until_go_validates_cookie(self):
+        def acquire(*args, session_sink, force_refresh):
+            self.assertTrue(force_refresh)
+            session_sink(SESSION)
+            return "fixture-bearer"
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(ROOT / ".tools" / "fake-appdata")}), \
+                patch.object(bridge, "load_browser_api", return_value=object()), \
+                patch.object(bridge, "acquire_token", side_effect=acquire):
+            result = self.run_bridge({"operation": "session-refresh", "source_url": "https://www.crunchyroll.com/watch/FIXTURE", "force_refresh": True})
+        self.assertEqual(result, {"status": "session_ok", "session": SESSION})
+        self.session.set.assert_not_called()
+        self.account.set.assert_not_called()
+
+    def test_docker_refresh_is_explicitly_unsupported_without_reading_password(self):
+        self.api.select_credential_store.return_value = SimpleNamespace(runtime=RuntimeKind.CONTAINER, store=SimpleNamespace(value="container_vault"))
+        with patch.object(bridge, "load_browser_api") as browser:
+            self.assertEqual(self.run_bridge({"operation": "session-refresh", "source_url": "https://www.crunchyroll.com/watch/FIXTURE"}), {"status": "session_refresh_unsupported"})
+            browser.assert_not_called()
+        self.account.get.assert_not_called()
+
+
+class BrowserSessionTests(unittest.TestCase):
+    def page(self, cookies):
+        page = Mock()
+        page.connection.send.return_value = {"cookies": cookies}
+        return page
+
+    def cookie(self, **overrides):
+        return dict({"name": "etp_rt", "value": SESSION["cookie"], "domain": ".crunchyroll.com", "path": "/", "secure": True, "expires": -1}, **overrides)
+
+    def test_capture_only_service_session_and_device(self):
+        page = self.page([self.cookie(), self.cookie(name="device_id", value=SESSION["device_id"]), self.cookie(name="unrelated", value="ignore"), self.cookie(domain="crunchyroll.com.attacker.invalid", value="ignore")])
+        self.assertEqual(bridge.read_browser_session(page), SESSION)
+        page.connection.send.assert_called_once_with("Network.getCookies", {"urls": [bridge.COOKIE_URL]})
+
+    def test_ambiguous_expired_insecure_or_malformed_cookie_fails(self):
+        for cookies in [[], [self.cookie(), self.cookie()], [self.cookie(secure=False)], [self.cookie(expires=1)], [self.cookie(expires=float("nan"))], [self.cookie(value="bad;cookie")], [self.cookie(domain="attacker.invalid")]]:
+            with self.subTest(cookies=len(cookies)), self.assertRaises(bridge.BridgeError):
+                bridge.read_browser_session(self.page(cookies))
+
+    def test_renewal_removes_only_owned_service_cookie(self):
+        page = self.page([self.cookie(), self.cookie(name="device_id"), self.cookie(domain="attacker.invalid")])
+        bridge.discard_rejected_browser_cookie(page)
+        self.assertEqual(page.connection.send.call_count, 2)
+        page.connection.send.assert_called_with("Network.deleteCookies", {"name": "etp_rt", "domain": ".crunchyroll.com", "path": "/"})
+
+    def test_capture_happens_before_owned_runtime_is_closed(self):
+        fixture = BridgeTests()
+        fixture.setUp()
+        page = self.page([self.cookie()])
+        fixture.browser.connect_page.side_effect = lambda **kwargs: contextlib.nullcontext(page)
+        captured = []
+        def sink(session):
+            fixture.session.close.assert_not_called()
+            captured.append(session)
+        self.assertEqual(bridge.acquire_token(fixture.api, "https://www.crunchyroll.com/watch/FIXTURE", fixture.application_root, lambda: None, session_sink=sink, force_refresh=True), "fixture-token")
+        self.assertEqual(captured[0]["cookie"], SESSION["cookie"])
+        fixture.session.close.assert_called_once()
+        self.assertTrue(any(call.args[0] == "Network.deleteCookies" for call in page.connection.send.call_args_list))
+
+
 @unittest.skipUnless(os.environ.get("CVA_TEST_ROOT"), "set CVA_TEST_ROOT for local CVA API compatibility tests")
 class LocalCVAContractTests(unittest.TestCase):
+    def test_actual_keyring_session_adapter_preserves_account_credentials(self):
+        api = bridge.load_cva(Path(os.environ["CVA_TEST_ROOT"]))
+        keyring_class = api.KeyringCredentialStore
+        account_service = "Crunchyroll Video Analyzer/Crunchyroll"
+        slots = {(account_service, "account"): "fixture-account", (account_service, "password"): "fixture-password"}
+        original = dict(slots)
+        backend = Mock()
+        backend.get_password.side_effect = lambda service, name: slots.get((service, name))
+        backend.set_password.side_effect = lambda service, name, value: slots.__setitem__((service, name), value)
+        backend.delete_password.side_effect = lambda service, name: slots.pop((service, name), None)
+        selection = api.select_credential_store(environment={"CVA_CREDENTIAL_BACKEND": "os-keyring"}, os_name="nt", marker_exists=lambda _: False)
+        with patch.object(api, "select_credential_store", return_value=selection), \
+                patch.object(api, "default_credential_store", return_value=object()), \
+                patch.object(api, "KeyringCredentialStore", side_effect=lambda **kwargs: keyring_class(backend, **kwargs)), \
+                patch.object(bridge, "load_cva", return_value=api):
+            self.assertEqual(bridge.run(ROOT, {"operation": "session-write", "session": SESSION}), {"status": "session_saved"})
+            self.assertEqual(bridge.run(ROOT, {"operation": "session-read"}), {"status": "session_ok", "session": SESSION})
+        self.assertEqual({key: slots[key] for key in original}, original)
+
     def test_actual_detection_and_factory_forwarding(self):
         api = bridge.load_cva(Path(os.environ["CVA_TEST_ROOT"]))
         actual_selector = api.select_credential_store
@@ -281,6 +427,15 @@ class LocalCVAContractTests(unittest.TestCase):
                 writer.set(CrunchyrollCredentials("fixture-account", "fixture-secret"))
                 original = vault.read_bytes()
                 self.assertNotIn(b"fixture-secret", original)
+                # The session uses CVA's actual AES-GCM implementation and key,
+                # but its file and lock are distinct from the account/password.
+                self.assertEqual(bridge.run(cva_root, {"operation": "session-write", "session": SESSION}), {"status": "session_saved"})
+                self.assertEqual(bridge.run(cva_root, {"operation": "session-read"}), {"status": "session_ok", "session": SESSION})
+                session_path = vault.with_name(vault.name + ".downloader-session")
+                self.assertNotIn(SESSION["cookie"].encode(), session_path.read_bytes())
+                self.assertEqual(session_path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(vault.read_bytes(), original)
+                self.assertEqual(writer.get().password, "fixture-secret")
                 # run() constructs a fresh production store from the same paths.
                 result = bridge.run(cva_root, {"operation": "credentials-check"})
                 self.assertEqual(result, {"status": "credentials_ok", "runtime": "container", "backend": "container_vault"})

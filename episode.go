@@ -69,7 +69,7 @@ func getEpisode(id string) (Episode, error) {
 	if err != nil {
 		return Episode{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+currentAccessToken())
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0")
 	resp, err := DoRequest(req)
 	if err != nil {
@@ -80,10 +80,10 @@ func getEpisode(id string) (Episode, error) {
 	var episode Episode
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return Episode{}, err
+		return Episode{}, failure("body_read_failed", "resolving", err)
 	}
 	if err = json.Unmarshal(body, &episode); err != nil {
-		return Episode{}, err
+		return Episode{}, failure("response_failed", "resolving", err)
 	}
 	if episode.Error != "" {
 		fmt.Printf("Error: %s", episode.Error)
@@ -95,7 +95,7 @@ func getEpisode(id string) (Episode, error) {
 			fmt.Println("Crunchyroll is rate-limiting this account. Wait a while before retrying, or use a different account.")
 			return Episode{}, fmt.Errorf("playback error: %s: %w", episode.Error, ErrRateLimited)
 		}
-		return Episode{}, fmt.Errorf("playback error: %s", episode.Error)
+		return Episode{}, failure("response_failed", "resolving", fmt.Errorf("playback error: %s", episode.Error))
 	}
 
 	if *debug {
@@ -135,7 +135,7 @@ func getEpisodeInfo(id string) EpisodeInfo {
 	if err != nil {
 		panic(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+currentAccessToken())
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0")
 	resp, err := DoRequest(req)
 	if err != nil {
@@ -146,10 +146,13 @@ func getEpisodeInfo(id string) EpisodeInfo {
 	var info EpisodeMetadataResponse
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		panic(err)
+		panic(failure("body_read_failed", "resolving", err))
 	}
 	if err = json.Unmarshal(body, &info); err != nil {
-		panic(err)
+		panic(failure("response_failed", "resolving", err))
+	}
+	if len(info.Data) == 0 {
+		panic(failure("response_failed", "resolving", errors.New("episode metadata is empty")))
 	}
 
 	return info.Data[0]
@@ -163,7 +166,7 @@ func deleteStream(contentId, sToken string) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+currentAccessToken())
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0")
 	resp, err := DoRequest(req)
 	if err != nil {

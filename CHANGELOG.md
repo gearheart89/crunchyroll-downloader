@@ -1,5 +1,25 @@
 # Changelog
 
+## cva/v1.6.0-1 (2026-10-28)
+
+First tagged CVA fork snapshot, based on upstream 1.6.0. Fork tags use the
+`cva/` namespace; upstream release history continues below.
+
+- Reuse CVA's platform-selected credential storage and securely cache downloader
+  session cookies, including device identity and cookie rotation. Windows can
+  renew sign-in through the browser; Linux/Docker can reuse saved cookies.
+- Add MP4 output with subtitles exported in their original format and named
+  after the video plus language. MKV remains the default container.
+- Add `--output-dir` and `--filename` for parent-managed absolute or relative
+  output paths, including `..` traversal from the working directory.
+- Add JSON progress protocol v1, authentication status, parser examples, and
+  consistent failure reporting for parent applications. JSON mode exports
+  video/audio only and leaves subtitles to the parent.
+- Preserve audio/video packet timestamps during muxing to fix multi-second
+  sync errors caused by independently rebasing fragmented AAC inputs.
+- Add integration and regression tests and document fork maintenance and
+  Windows/Debian Docker packaging requirements.
+
 ## 1.6.0
 
 - Added `--download-delay` to wait a minimum time between episode downloads, which helps avoid Crunchyroll's rate limiting on season and batch downloads ([#42](https://github.com/CuteTenshii/crunchyroll-downloader/issues/42), [#57](https://github.com/CuteTenshii/crunchyroll-downloader/issues/57))
