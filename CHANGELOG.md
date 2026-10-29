@@ -1,5 +1,16 @@
 # Changelog
 
+## cva/v1.6.0-2 (2026-10-28)
+
+- Connect Linux/Docker session renewal to CVA's existing private authentication
+  socket and owned browser. Cached-cookie reuse remains first; renewed cookies
+  are validated before being saved in the existing encrypted session vault.
+- Preserve sanitized JSON failure reasons and clarify the missing-connection
+  message. Windows sign-in retains its existing browser flow.
+- Add adapter contracts and native Linux IPC coverage, and document the CVA
+  version and invocation requirements. Standalone Linux processes without an
+  active CVA connection still require a usable saved or manually supplied cookie.
+
 ## cva/v1.6.0-1 (2026-10-28)
 
 First tagged CVA fork snapshot, based on upstream 1.6.0. Fork tags use the

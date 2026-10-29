@@ -18,6 +18,14 @@ import uuid
 SESSION_SERVICE = "Crunchyroll Downloader/Crunchyroll Session"
 SESSION_SCHEMA = "crunchyroll-downloader-session-v1"
 COOKIE_URL = "https://www.crunchyroll.com/auth/v1/token"
+_CONTAINER_REFRESH_FAILURES = frozenset({
+    "session_refresh_unsupported", "session_unavailable", "session_invalid",
+    "source", "protocol", "runtime", "configuration", "profile_error",
+    "credential_config", "credential_unavailable", "credential_locked",
+    "credential_corrupt", "credential_store", "credentials_missing",
+    "bad_credentials", "verification_required", "interaction_required",
+    "network_error", "site_error", "auth_flow_changed",
+})
 
 
 class BridgeError(Exception):
@@ -189,6 +197,26 @@ def discard_rejected_browser_cookie(page):
             })
 
 
+def refresh_container_session(source_url, force_refresh):
+    # CVA's active invocation owns the broker and browser. The inherited path
+    # carries no secret; session material stays in its private IPC and our pipe.
+    if not os.environ.get("CVA_DOWNLOADER_AUTH_SOCKET"):
+        raise BridgeError("session_refresh_unsupported")
+    try:
+        from crunchyroll_video_analyzer.container_auth import request_session_refresh
+    except ImportError:
+        raise BridgeError("dependencies") from None
+    result = request_session_refresh(source_url, force_refresh, environ=os.environ)
+    if not isinstance(result, dict):
+        raise BridgeError("runtime")
+    status = result.get("status")
+    if status == "session_ok" and set(result) == {"status", "session"}:
+        return {"status": "session_ok", "session": validate_session(result["session"])}
+    if isinstance(status, str) and status in _CONTAINER_REFRESH_FAILURES:
+        raise BridgeError(status)
+    raise BridgeError("runtime")
+
+
 def acquire_token(api, source_url, application_root, credential_lookup, *, session_sink=None, force_refresh=False):
     identity = api.parse_crunchyroll_resource(source_url)
     if identity is None:
@@ -248,12 +276,17 @@ def run(root, request):
     except Exception:
         return {"status": "dependencies"}
     try:
+        if not isinstance(request, dict):
+            raise BridgeError("protocol")
         operation = request.get("operation", "token")
-        if operation not in {"token", "credentials-check", "session-read", "session-write", "session-refresh"}:
+        if not isinstance(operation, str) or operation not in {"token", "credentials-check", "session-read", "session-write", "session-refresh"}:
             raise BridgeError("protocol")
         source_url = request.get("source_url")
         if operation in {"token", "session-refresh"} and (not isinstance(source_url, str) or not source_url):
             raise BridgeError("source")
+        force_refresh = request.get("force_refresh", False)
+        if operation == "session-refresh" and type(force_refresh) is not bool:
+            raise BridgeError("protocol")
         selection, store = selected_credential_store(api)
         if operation in {"session-read", "session-write"}:
             session_store = selected_session_store(api, selection, store)
@@ -272,6 +305,9 @@ def run(root, request):
             }
         if selection.runtime is not api.CredentialRuntimeKind.WINDOWS_DESKTOP:
             if operation == "session-refresh":
+                if selection.runtime is api.CredentialRuntimeKind.CONTAINER:
+                    # Go validates the result before writing the session cache.
+                    return refresh_container_session(source_url, force_refresh)
                 raise BridgeError("session_refresh_unsupported")
             raise BridgeError("browser_runtime_unsupported")
         local_app_data = os.environ.get("LOCALAPPDATA")
@@ -284,9 +320,6 @@ def run(root, request):
         # Share CVA's selected credential store, never its profile/runtime state.
         application_root = Path(local_app_data) / "Crunchyroll Downloader"
         if operation == "session-refresh":
-            force_refresh = request.get("force_refresh", False)
-            if type(force_refresh) is not bool:
-                raise BridgeError("protocol")
             captured = []
             acquire_token(
                 browser_api, source_url, application_root,

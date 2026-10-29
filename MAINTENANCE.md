@@ -20,12 +20,12 @@ Recorded on **2026-10-28**; recheck these values before future integration work.
 | Last fully integrated upstream release | `1.6.0` |
 | Upstream baseline commit | `182ea1b84bbfcdd5755fa8cd4d07a901fea1c199` |
 | Current customization branch | `feature/cva-keyring-auth` |
-| Fork checkpoint | `cva/v1.6.0-1` |
+| Fork checkpoint | `cva/v1.6.0-2` |
 
 This checkpoint includes output-path options, subtitle naming, JSON progress,
-session caching, authentication details, the audio/video timestamp fix, and
+session caching, container browser renewal, the audio/video timestamp fix, and
 their tests and documentation. Resolve its exact commit with
-`git rev-parse "cva/v1.6.0-1^{commit}"`. Local executables are ignored by Git;
+`git rev-parse "cva/v1.6.0-2^{commit}"`. Local executables are ignored by Git;
 rebuild from the tagged source or use the matching fork release assets.
 
 Before applying a future update, preserve the complete customized source in a
@@ -38,7 +38,7 @@ Use annotated tags named `cva/v<upstream-version>-<fork-revision>`. The `cva/`
 namespace separates our tags from upstream's ordinary version tags:
 
 - `cva/v1.6.0-1`: first tagged CVA snapshot based on upstream 1.6.0.
-- `cva/v1.6.0-2`: another fork update on the same upstream baseline.
+- `cva/v1.6.0-2`: container sign-in renewal on the same upstream baseline.
 - `cva/v1.7.0-1`: first fork snapshot after fully integrating upstream 1.7.0.
 
 These are Git tag names, not Semantic Versioning prerelease identifiers. Keep
@@ -74,9 +74,12 @@ Important details behind that checklist:
 - An explicit `--etp-rt` without `--save-cookie` remains a one-run override that
   does not need CVA/Python. With `--save-cookie`, validate before persisting it.
   Rejected explicit input must not silently switch to another account.
-- A valid saved cookie works on Linux/Docker. Automatic browser renewal currently
-  requires Windows. Preserve the actionable `session_refresh_unsupported` failure
-  until Linux renewal is intentionally implemented and tested.
+- A valid saved cookie works on Linux/Docker. Container renewal imports CVA's
+  `container_auth.request_session_refresh` and uses its invocation-scoped
+  `CVA_DOWNLOADER_AUTH_SOCKET`. CVA owns the browser, same-UID socket checks,
+  exact watch-source binding, and cancellation. Preserve the unsupported state
+  when no connection exists, and never start a second container browser or save
+  an unvalidated renewal. Keep [adapter and IPC tests](tests/test_container_auth.py).
 - JSON mode accepts one `/watch/` episode and produces video/audio only.
   Requested audio must be available; duplicate requested locales download once.
   The parent owns subtitle handling and independent output validation.

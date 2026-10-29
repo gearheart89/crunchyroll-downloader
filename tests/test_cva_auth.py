@@ -316,9 +316,9 @@ class SessionStorageTests(unittest.TestCase):
         self.session.set.assert_not_called()
         self.account.set.assert_not_called()
 
-    def test_docker_refresh_is_explicitly_unsupported_without_reading_password(self):
+    def test_docker_refresh_without_handoff_is_unsupported_without_reading_password(self):
         self.api.select_credential_store.return_value = SimpleNamespace(runtime=RuntimeKind.CONTAINER, store=SimpleNamespace(value="container_vault"))
-        with patch.object(bridge, "load_browser_api") as browser:
+        with patch.dict(os.environ, {}, clear=True), patch.object(bridge, "load_browser_api") as browser:
             self.assertEqual(self.run_bridge({"operation": "session-refresh", "source_url": "https://www.crunchyroll.com/watch/FIXTURE"}), {"status": "session_refresh_unsupported"})
             browser.assert_not_called()
         self.account.get.assert_not_called()

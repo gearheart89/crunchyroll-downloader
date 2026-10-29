@@ -11,7 +11,7 @@ significant.
 | --- | --- | --- |
 | [cached-session.jsonl](cached-session.jsonl) | Saved cookie accepted; no browser renewal or storage write | `skipped_existing` / 0 |
 | [renewed-session.jsonl](renewed-session.jsonl) | Known-expired cookie renewed, validated, and saved | `skipped_existing` / 0 |
-| [unsupported-renewal.jsonl](unsupported-renewal.jsonl) | Missing saved session on a platform without browser renewal, including Docker/Linux | `failed`, `reason: session_refresh_unsupported` / nonzero |
+| [unsupported-renewal.jsonl](unsupported-renewal.jsonl) | Missing saved session without a renewal connection, including Docker/Linux launched outside CVA | `failed`, `reason: session_refresh_unsupported` / nonzero |
 | [locked-store.jsonl](locked-store.jsonl) | Credential vault locked; no renewal attempted | `failed`, `reason: credential_locked` / nonzero |
 | [rejected-cookie.jsonl](rejected-cookie.jsonl) | Explicitly supplied cookie rejected; no automatic account switch | `failed`, `reason: session_rejected` / nonzero |
 
@@ -71,8 +71,12 @@ detail is available; CVA must still handle that failure using `code`.
 `bad_credentials` refers to the account credentials used by browser sign-in;
 `session_rejected` refers to a session cookie rejected by the token endpoint.
 `session_invalid` means the stored or returned session data is malformed.
-`session_refresh_unsupported` means renewal was needed but cannot run on the
-current platform; it does not mean the encrypted credential store is unsupported.
+`session_refresh_unsupported` means renewal was needed but no supported browser
+connection is available. Linux/Docker can renew through CVA's active private
+authentication connection; without it, this reason remains actionable. It does
+not mean the encrypted credential store is unsupported. Container renewal uses
+the same `refreshing_session`, `validating_session`, and `saving_session` events
+as Windows; there is no new protocol version or required parser field.
 A generic token-exchange/network failure may have no reason.
 
 Display the event's safe `display_message`. Do not derive text from raw helper

@@ -11,7 +11,7 @@ Downloads anime from Crunchyroll and outputs them in an MKV or MP4 file.
 This fork starts from upstream **1.6.0** (`182ea1b`) and reads the account/password
 already stored by **Crunchyroll Video Analyzer (CVA)** through its platform-aware
 credential store. Windows browser sign-in uses those stored credentials. Use
-the fork release **`cva/v1.6.0-1`** or build this fork to use the integration;
+the fork release **`cva/v1.6.0-2`** or build this fork to use the integration;
 upstream releases do not contain these customizations.
 
 For future upstream reviews, customization requirements, validation, and parent
@@ -20,16 +20,18 @@ project handoff, see the [fork maintenance guide](MAINTENANCE.md).
 ## CVA stored credentials
 
 Omit `--etp-rt` to try the downloader's securely stored session cookie first.
-On Windows, a missing, expired, or rejected cookie is renewed through CVA's
-browser sign-in and the replacement is saved automatically. This requires:
+A missing, expired, or rejected cookie is renewed through CVA's browser sign-in
+on Windows, or through CVA's active container authentication connection on
+Linux/Docker. The replacement is validated and saved automatically. This requires:
 
 - An existing CVA installation/source folder and its Python dependencies.
 - The Python interpreter used by CVA (`keyring`, `websocket-client`, and the other
   packages in CVA's own `requirements.txt` must be installed for that interpreter).
-- Installed official Google Chrome and a Windows environment supported by CVA
-  when browser renewal is needed; a valid stored cookie does not launch Chrome.
-- Credentials previously added through CVA's credential manager, under the same
-  Windows user running the downloader.
+- On Windows, installed official Google Chrome and an environment supported by
+  CVA. On Linux/Docker, an invocation launched by CVA with its owned browser and
+  private authentication connection. A valid saved cookie needs neither browser path.
+- Credentials previously added through CVA's credential manager, available to
+  the same Windows user or dedicated container UID running the downloader.
 
 The fork calls CVA's `select_credential_store()` and
 `default_credential_store(selection=...)` directly. It uses the same detection,
@@ -89,10 +91,20 @@ storage/unlock contract is `docs/CONTAINER_CREDENTIAL_VAULT.md` in your CVA fold
 Missing credentials, locked keys, corrupt vaults, unavailable storage, and invalid
 configuration produce distinct sanitized errors; there is no plaintext fallback.
 
-**Stored-cookie authentication works on Linux/Docker. Browser renewal through
-CVA still requires Windows.** A missing or expired Docker cookie produces a
-clear authentication failure until a replacement is supplied. This change does
-not provide a Linux Chrome lifecycle or a Docker application image.
+**Linux/Docker can renew sessions through CVA's active container browser.**
+Use a CVA version that provides
+`crunchyroll_video_analyzer.container_auth.request_session_refresh`. CVA's
+container download runner supplies `CVA_DOWNLOADER_AUTH_SOCKET` for each owned
+download invocation. The downloader imports that client and asks CVA to renew
+the exact watch URL. CVA owns the browser, credential lookup, cancellation,
+and socket lifetime; the downloader does not launch a second container browser.
+
+The socket path contains no credentials. CVA checks private socket ownership,
+same-UID peer identity, and the exact active source. Do not configure a permanent
+socket path or expose it as a public service. Standalone Linux invocations outside
+CVA can still reuse stored cookies, but without this active connection a missing
+or expired session reports `session_refresh_unsupported`. Vault credentials
+alone do not start a browser. Manual `--etp-rt --save-cookie` remains available.
 
 ### Session cookie reuse and renewal
 
@@ -102,7 +114,8 @@ Normal invocations, including `--auth-check`, use this sequence:
 2. Exchange a valid stored `etp_rt` cookie for a short-lived bearer token. Keep
    its device ID stable and save cookie/device rotations returned by the service.
 3. If the cookie is missing, past its recorded expiry, or explicitly rejected
-   by authentication, renew it through the existing Windows/CVA browser flow.
+   by authentication, renew it through the Windows browser flow or CVA's active
+   container authentication connection.
 4. Validate the renewed cookie with the token endpoint before replacing the
    stored session. A failed renewal preserves the previous saved value.
 
@@ -112,7 +125,9 @@ rate limits, server failures, and generic 403 challenge responses do not prove
 cookie expiry and do not launch Chrome or overwrite the session. Cookie expiry
 is taken from cookie metadata when available; a bearer token's `expires_in`
 does not determine cookie lifetime. Unknown cookie lifetime is checked through
-the token endpoint on each invocation.
+the token endpoint on each invocation. Human verification, bad credentials,
+unavailable connections, and renewal failures retain the existing sanitized
+authentication reasons; they do not replace the previous saved session.
 
 Storage locations are:
 
@@ -237,7 +252,8 @@ run `chmod +x crunchyroll-downloader` after downloading it.
 These assets contain the downloader and embedded bridge, not FFmpeg, CVA,
 Python, or device credentials. CVA authentication still requires a compatible
 CVA source installation and Python runtime with its dependencies. Automatic
-browser sign-in renewal currently requires Windows; Linux/Docker uses a saved
+browser sign-in renewal uses Windows Chrome or CVA's active container connection;
+standalone Linux invocations without that connection require a usable saved
 cookie or an explicit `--etp-rt` cookie as described above.
 
 Fork tags use `cva/v<upstream-version>-<fork-revision>`, starting with

@@ -82,14 +82,14 @@ func TestCVACredentialCheckInvokesHelperWithConfiguration(t *testing.T) {
 	}
 	oldScript := cvaAuthScript
 	t.Cleanup(func() { cvaAuthScript = oldScript })
-	for _, name := range []string{"CVA_CONTAINER", "CVA_CREDENTIAL_BACKEND", "CVA_CREDENTIAL_VAULT_PATH", "CVA_CREDENTIAL_KEY_PATH"} {
+	for _, name := range []string{"CVA_CONTAINER", "CVA_CREDENTIAL_BACKEND", "CVA_CREDENTIAL_VAULT_PATH", "CVA_CREDENTIAL_KEY_PATH", "CVA_DOWNLOADER_AUTH_SOCKET"} {
 		t.Setenv(name, "fixture-configuration")
 	}
 	cvaAuthScript = `import json,os,sys
 request = json.load(sys.stdin)
 assert request["operation"] == "credentials-check"
 assert request["source_url"] == ""
-for name in ("CVA_CONTAINER", "CVA_CREDENTIAL_BACKEND", "CVA_CREDENTIAL_VAULT_PATH", "CVA_CREDENTIAL_KEY_PATH"):
+for name in ("CVA_CONTAINER", "CVA_CREDENTIAL_BACKEND", "CVA_CREDENTIAL_VAULT_PATH", "CVA_CREDENTIAL_KEY_PATH", "CVA_DOWNLOADER_AUTH_SOCKET"):
     assert os.environ[name] == "fixture-configuration"
 print('{"status":"credentials_ok","runtime":"container","backend":"container_vault"}')`
 	got, err := checkCVACredentials(cvaAuthOptions{Root: root, Python: python})
