@@ -1,0 +1,20 @@
+{
+  "schema": "cva.media-window-result",
+  "version": 1,
+  "request_id": "restore-reference-0042",
+  "attempt_id": "attempt-01",
+  "status": "failed",
+  "acquired_at": "2026-11-18T12:00:00Z",
+  "downloader_version": "EXAMPLE-BUILD",
+  "source": null,
+  "representation": null,
+  "windows": [],
+  "clips": [],
+  "errors": [
+    {
+      "code": "unsupported_capability",
+      "window_id": null,
+      "message": "Media-window acquisition is not supported."
+    }
+  ]
+}

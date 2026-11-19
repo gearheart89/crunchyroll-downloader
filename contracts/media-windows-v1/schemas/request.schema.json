@@ -1,0 +1,361 @@
+{
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "cva.media-window-request"
+    },
+    "version": {
+      "const": 1
+    },
+    "request_id": {
+      "$ref": "#/$defs/id"
+    },
+    "operation": {
+      "const": "acquire_windows"
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "const": "crunchyroll"
+        },
+        "watch_id": {
+          "$ref": "#/$defs/id"
+        },
+        "presentation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "presentation_locale": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/locale"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_snapshot_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "watch_id",
+        "presentation_id",
+        "presentation_locale",
+        "expected_snapshot_id"
+      ],
+      "additionalProperties": false
+    },
+    "video": {
+      "type": "object",
+      "properties": {
+        "selection": {
+          "enum": [
+            "highest",
+            "representation_id"
+          ]
+        },
+        "representation_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "allow_representation_substitution": {
+          "const": false
+        }
+      },
+      "required": [
+        "selection",
+        "representation_id",
+        "allow_representation_substitution"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "selection": {
+                "const": "representation_id"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "representation_id": {
+                "$ref": "#/$defs/id"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "representation_id": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "streams": {
+      "type": "object",
+      "properties": {
+        "video": {
+          "const": true
+        },
+        "audio": {
+          "const": false
+        },
+        "subtitles": {
+          "const": false
+        }
+      },
+      "required": [
+        "video",
+        "audio",
+        "subtitles"
+      ],
+      "additionalProperties": false
+    },
+    "windows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "window_id": {
+            "$ref": "#/$defs/id"
+          },
+          "anchor": {
+            "enum": [
+              "episode_start",
+              "episode_end"
+            ]
+          },
+          "start_seconds": {
+            "$ref": "#/$defs/rational"
+          },
+          "end_seconds": {
+            "$ref": "#/$defs/rational"
+          },
+          "context_before_seconds": {
+            "$ref": "#/$defs/nonnegativeRational"
+          },
+          "context_after_seconds": {
+            "$ref": "#/$defs/nonnegativeRational"
+          },
+          "boundary_policy": {
+            "enum": [
+              "clamp_to_episode",
+              "require_requested_interval"
+            ]
+          }
+        },
+        "required": [
+          "window_id",
+          "anchor",
+          "start_seconds",
+          "end_seconds",
+          "context_before_seconds",
+          "context_after_seconds",
+          "boundary_policy"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 64
+    },
+    "delivery": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "const": "mp4"
+        },
+        "self_contained": {
+          "const": true
+        },
+        "video_encoding": {
+          "const": "forbidden"
+        },
+        "timestamp_policy": {
+          "const": "rebase_with_exact_mapping"
+        },
+        "dependency_padding": {
+          "const": "expand_to_decodable"
+        },
+        "max_dependency_padding_before_seconds": {
+          "$ref": "#/$defs/nonnegativeRational"
+        },
+        "max_dependency_padding_after_seconds": {
+          "$ref": "#/$defs/nonnegativeRational"
+        },
+        "allow_discontinuity_split": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "container",
+        "self_contained",
+        "video_encoding",
+        "timestamp_policy",
+        "dependency_padding",
+        "max_dependency_padding_before_seconds",
+        "max_dependency_padding_after_seconds",
+        "allow_discontinuity_split"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "$ref": "#/$defs/label"
+        },
+        "overwrite": {
+          "const": false
+        }
+      },
+      "required": [
+        "directory",
+        "overwrite"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "request_id",
+    "operation",
+    "source",
+    "video",
+    "streams",
+    "windows",
+    "delivery",
+    "output"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cva:media-window-request:1",
+  "title": "CVA media window request v1",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "rational": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)/[1-9][0-9]*$"
+    },
+    "positiveRational": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*/[1-9][0-9]*$"
+    },
+    "nonnegativeRational": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)/[1-9][0-9]*$"
+    },
+    "integerTicks": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)$"
+    },
+    "nonnegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[\\\\:\\u0000-\\u001f\\u007f])[^/]+(?:/[^/]+)*$"
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$"
+    },
+    "interval": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rational"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "color": {
+      "type": "object",
+      "properties": {
+        "range": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "matrix": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "primaries": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transfer": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "range",
+        "matrix",
+        "primaries",
+        "transfer"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

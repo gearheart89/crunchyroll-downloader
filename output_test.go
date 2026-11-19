@@ -109,10 +109,16 @@ func requireMediaTools(t *testing.T) (ffmpeg, ffprobe string) {
 	t.Helper()
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
+		if os.Getenv("CRDL_REQUIRE_MEDIA_TOOLS") == "1" {
+			t.Fatal("FFmpeg is required for media acceptance tests")
+		}
 		t.Skip("FFmpeg is required for the synthetic output integration test")
 	}
 	ffprobe, err = exec.LookPath("ffprobe")
 	if err != nil {
+		if os.Getenv("CRDL_REQUIRE_MEDIA_TOOLS") == "1" {
+			t.Fatal("FFprobe is required for media acceptance tests")
+		}
 		t.Skip("FFprobe is required for the synthetic output integration test")
 	}
 	previous := ffmpegPath

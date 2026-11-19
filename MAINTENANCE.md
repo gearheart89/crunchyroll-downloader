@@ -11,7 +11,7 @@ It does not require a schedule or an update while the current version is working
 
 ## Starting point
 
-Recorded on **2026-10-28**; recheck these values before future integration work.
+Recorded on **2026-11-18**; recheck these values before future integration work.
 
 | Item | Recorded value |
 | --- | --- |
@@ -20,13 +20,14 @@ Recorded on **2026-10-28**; recheck these values before future integration work.
 | Last fully integrated upstream release | `1.6.0` |
 | Upstream baseline commit | `182ea1b84bbfcdd5755fa8cd4d07a901fea1c199` |
 | Current customization branch | `feature/cva-keyring-auth` |
-| Fork checkpoint | `cva/v1.6.0-2` |
+| Fork checkpoint | `cva/v1.6.0-3` |
 
 This checkpoint includes output-path options, subtitle naming, JSON progress,
 session caching, container browser renewal, the audio/video timestamp fix, and
-their tests and documentation. Resolve its exact commit with
-`git rev-parse "cva/v1.6.0-2^{commit}"`. Local executables are ignored by Git;
-rebuild from the tagged source or use the matching fork release assets.
+video-only media-window acquisition with its tests and CVA handoff. Resolve its
+exact commit with `git rev-parse "cva/v1.6.0-3^{commit}"`. Local executables are
+ignored by Git; rebuild from the tagged source or obtain the matching release
+asset and verify its adjacent SHA-256 checksum file.
 
 Before applying a future update, preserve the complete customized source in a
 local checkpoint. A branch created from HEAD alone does not preserve uncommitted
@@ -39,6 +40,7 @@ namespace separates our tags from upstream's ordinary version tags:
 
 - `cva/v1.6.0-1`: first tagged CVA snapshot based on upstream 1.6.0.
 - `cva/v1.6.0-2`: container sign-in renewal on the same upstream baseline.
+- `cva/v1.6.0-3`: media-window v1 acquisition and CVA consumer handoff.
 - `cva/v1.7.0-1`: first fork snapshot after fully integrating upstream 1.7.0.
 
 These are Git tag names, not Semantic Versioning prerelease identifiers. Keep
@@ -46,10 +48,20 @@ the upstream version unchanged for selective ports and record those source
 commits separately. Never move an existing release tag to different code;
 increment the fork revision. Commit the complete source before tagging it.
 Push explicitly to `origin`, and publish releases only in the fork. The current
-release workflow builds Windows amd64, Linux amd64, and macOS amd64/arm64 assets
+release workflow builds Windows amd64, Linux amd64/arm64, and macOS amd64/arm64 assets
 when a GitHub release is published; creating a local tag does not run it.
 
 ## Behavior to preserve
+
+The media-window implementation is documented in the README and
+`contracts/media-windows-v1/CONTRACT.md` (handoff revision 2). Preserve its separate
+protocol namespace, strict request validation, source identity, byte-range checks,
+sample/timestamp evidence, dependency validation and no-overwrite publication.
+Include the embedded contract schemas in source/build profiles. Run `TestWindow`
+with native FFmpeg/FFprobe available on Windows and Linux when changing this path.
+Its capability query must not advertise an unimplemented or unqualified adapter.
+The `cva/v1.6.0-3` checkpoint includes this feature. Consumer integration and
+restoration acceptance remain separate; see [the handoff](CVA_MEDIA_WINDOWS_HANDOFF.md).
 
 The [README](README.md) and [JSON examples](examples/progress/README.md) describe
 the current public interface. Treat the following as the compatibility checklist
@@ -226,8 +238,9 @@ configuration paths resolve from its application root, while the downloader's
 relative `--output-dir` resolves from its configured process working directory.
 Widevine device-file discovery currently also uses that working directory.
 
-Include Go source, `go.mod`, `go.sum`, the embedded `cva_auth.py`, license, and
-documentation/examples when handing off source. Exclude `.git`, `.tools`, caches,
+Include Go source, `go.mod`, `go.sum`, the embedded `cva_auth.py`,
+`contracts/media-windows-v1/schemas`, license, and documentation/examples when
+handing off source. Exclude `.git`, `.tools`, caches,
 credentials, device secrets, and media. Record the exact fork revision, or the
 fact that a supplied source snapshot contains uncommitted changes. A source copy
 does not update an existing executable; rebuild through the parent profile after

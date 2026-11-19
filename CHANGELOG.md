@@ -1,5 +1,25 @@
 # Changelog
 
+## cva/v1.6.0-3 (2026-11-18)
+
+- Add revision 2 of CVA's media-window v1 acquisition contract, an offline
+  capability query, request-file entry point and separate JSON progress protocol.
+- Select DASH segments or indexed byte ranges for video-only windows, preserving
+  encoded samples and publishing MP4 clips with exact source/sample timing maps.
+- Validate IDR-based decoding dependencies, packet hashes and timing, and decode
+  delivered clips offline. Reject unsupported media/configuration changes instead
+  of transcoding or silently downloading complete tracks.
+- Publish completed/partial/failed results with hashes and immutable directories;
+  retain ordinary download behavior and reuse existing CVA session authentication.
+- Add synthetic encrypted-media, timing, range, protocol, cancellation and
+  publication regression tests, plus a live Windows one-minute acceptance test.
+- Correct provider-manifest authentication and playback cleanup in media-window
+  mode, restricting bearer credentials to the exact provider origin. Support
+  single normal-speed edit-list offsets and reordered-frame clock rounding
+  without changing encoded samples or their recorded timestamps.
+- Add the CVA consumer/build handoff, Linux arm64 release/CI builds and SHA-256
+  checksum files for every release executable.
+
 ## cva/v1.6.0-2 (2026-10-28)
 
 - Connect Linux/Docker session renewal to CVA's existing private authentication

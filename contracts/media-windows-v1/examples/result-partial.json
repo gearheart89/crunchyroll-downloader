@@ -1,0 +1,96 @@
+{
+  "schema": "cva.media-window-result",
+  "version": 1,
+  "request_id": "restore-reference-0042",
+  "attempt_id": "attempt-01",
+  "status": "partial",
+  "acquired_at": "2026-11-18T12:00:00Z",
+  "downloader_version": "EXAMPLE-BUILD",
+  "source": {
+    "provider": "crunchyroll",
+    "watch_id": "EXAMPLE-EPISODE",
+    "presentation_id": "EXAMPLE-VERSION",
+    "presentation_locale": "en-US",
+    "provider_revision": null,
+    "snapshot_id": "example-snapshot-1",
+    "episode_duration_seconds": "1440/1"
+  },
+  "representation": {
+    "id": "example-video-representation",
+    "codec": "h264",
+    "codec_tag": "avc1",
+    "profile": "High",
+    "level": 40,
+    "codec_configuration_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "width": 1920,
+    "height": 1080,
+    "pixel_format": "yuv420p",
+    "bit_depth": 8,
+    "sample_aspect_ratio": "1/1",
+    "average_frame_rate": "24000/1001",
+    "color": {
+      "range": "limited",
+      "matrix": "bt709",
+      "primaries": "bt709",
+      "transfer": "bt709"
+    }
+  },
+  "windows": [
+    {
+      "window_id": "opening-gap-01",
+      "status": "partial",
+      "resolved_requested_seconds": [
+        "120/1",
+        "150/1"
+      ],
+      "resolved_context_seconds": [
+        "115/1",
+        "155/1"
+      ],
+      "clip_ids": [
+        "clip-01"
+      ]
+    }
+  ],
+  "clips": [
+    {
+      "clip_id": "clip-01",
+      "path": "clip-01.mp4",
+      "bytes": 12345678,
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "stream_index": 0,
+      "source_period_id": "period-0",
+      "discontinuity_id": null,
+      "source_time_base": "1/90000",
+      "clip_time_base": "1/90000",
+      "delivered_episode_seconds": [
+        "113/1",
+        "140/1"
+      ],
+      "timeline": {
+        "path": "clip-01.timeline.jsonl",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "schema": "cva.media-sample-map",
+        "version": 1
+      },
+      "assembly": {
+        "video_reencoded": false,
+        "bitstream_filters": []
+      },
+      "validation": {
+        "level": "probe_and_boundary_decode",
+        "self_contained": true,
+        "decode_dependencies_complete": true,
+        "requested_coverage_complete": false,
+        "discontinuities": []
+      }
+    }
+  ],
+  "errors": [
+    {
+      "code": "coverage_incomplete",
+      "window_id": "opening-gap-01",
+      "message": "The complete requested interval could not be acquired."
+    }
+  ]
+}

@@ -11,11 +11,123 @@ Downloads anime from Crunchyroll and outputs them in an MKV or MP4 file.
 This fork starts from upstream **1.6.0** (`182ea1b`) and reads the account/password
 already stored by **Crunchyroll Video Analyzer (CVA)** through its platform-aware
 credential store. Windows browser sign-in uses those stored credentials. Use
-the fork release **`cva/v1.6.0-2`** or build this fork to use the integration;
+the fork release **`cva/v1.6.0-3`** or build its tagged source for all current features;
 upstream releases do not contain these customizations.
 
 For future upstream reviews, customization requirements, validation, and parent
 project handoff, see the [fork maintenance guide](MAINTENANCE.md).
+
+## Video-only media windows (`cva/v1.6.0-3`)
+
+The working source adds CVA's **media-window v1, handoff revision 2** interface.
+It acquires selected portions of one exact episode presentation as video-only
+MP4 clips, without re-encoding. CVA supplies the selection and handles alignment,
+masks, review and compositing. This feature is not in `cva/v1.6.0-2`.
+See the [CVA integration handoff](CVA_MEDIA_WINDOWS_HANDOFF.md) for invocation,
+build pinning, release assets, acceptance evidence and the remaining consumer work.
+
+```powershell
+.\crunchyroll-downloader.exe --capabilities-json
+.\crunchyroll-downloader.exe --request-json "C:\CVA Work\requests\opening-ending.json" --cva-root "..\Crunchyroll Video Analyzer"
+```
+
+```sh
+./crunchyroll-downloader --capabilities-json
+./crunchyroll-downloader --request-json /work/requests/opening-ending.json --cva-root /opt/cva --cva-python /opt/cva-venv/bin/python
+```
+
+The capability query is offline and performs no authentication. The request file
+must follow the [bundled contract](contracts/media-windows-v1/CONTRACT.md).
+Start with the [first/last-five-minute example](contracts/media-windows-v1/examples/request-discovery.json).
+Replace its synthetic episode/version IDs and output directory with real values.
+`presentation_id` is the exact version GUID from the episode's versions metadata;
+it must belong to `watch_id` and match `presentation_locale` when one is provided.
+The downloader does not silently choose a different language or representation.
+
+Each window uses rational seconds, such as `"300/1"`. The opening example asks
+for `[0,300)` from `episode_start`; the ending asks for `[-300,0)` from
+`episode_end`. `clamp_to_episode` handles episodes shorter than five minutes.
+For precise follow-ups, use `require_requested_interval` and pin the returned
+`representation.id` and `source.snapshot_id`. Representation IDs are opaque
+downloader IDs, not raw MPD IDs or resolution labels. Context and decoding padding
+are separate from requested content. The downloader does not identify themes.
+
+`output.directory` must be a native absolute path to a **new acquisition
+directory under an existing private parent directory**. On Windows use a JSON
+string such as `"C:\\CVA Work\\acquisitions\\request-0041"`; in Docker use a
+container-visible path such as `"/work/acquisitions/request-0041"`. Relative
+request-file paths resolve from the process working directory. The output
+directory itself cannot be relative, contain unresolved `..`, or already exist.
+The ordinary download flags `--output-dir` and `--filename` retain their original
+behavior, but cannot be combined with `--request-json`. Selection/output flags,
+`--url`, `--file`, `--progress-format`, and debug mode also conflict with this mode.
+`--cva-root` and `--cva-python` remain available; existing CVA environment and
+private container authentication settings are reused.
+For this mode, CVA's invocation-scoped authentication socket must authorize the
+exact source URL `https://www.crunchyroll.com/watch/<watch_id>` (without a title
+slug or query string), matching the request's `source.watch_id`.
+
+Successful acquisition publishes `result.json`, one MP4 per continuous selected
+span, and one sample-map JSONL file per MP4. The sidecars describe requested
+content, analysis context, decoding dependencies, source and delivered PTS/DTS,
+durations and sample hashes. Clips can include extra frames required for decoding.
+The sidecar's `episode_time_seconds` is the authority for original episode
+position; do not assume that clip time zero equals requested time zero.
+Single normal-speed edit lists are applied before DASH presentation offsets;
+the sidecar retains raw source PTS/DTS as well as the mapped episode time.
+At internal frame boundaries, coverage validation accommodates one media-clock
+tick of integer rounding when pictures are reordered. It requires contiguous
+encoded samples, preserves all timestamps, and never extends outer coverage.
+
+Encoded sample hashes cover **decrypted, length-prefixed compressed video sample
+bytes**, not encrypted network bytes. Every delivered packet's payload, duration
+and relative PTS/DTS are checked against those source samples. Container clocks
+can acquire constant presentation/decode shifts during remuxing; the measured
+final clocks are recorded per sample. Codec configuration hashes cover the AVC
+decoder configuration record (the `avcC` payload without its box header).
+Snapshot IDs hash source/presentation identity, selected representation,
+initialization bytes, period/timeline mapping and segment index layout, excluding
+signed locators. They identify that metadata snapshot, not an assurance that the
+provider will never replace media behind unchanged metadata.
+
+The new stdout protocol is `cva-media-window-progress` version 1, with sequence
+numbers starting at 1. It is separate from the existing ordinary-download JSON
+protocol. Transfer counters cover the planned dependency-expanded segments;
+overlapping windows can share the same transfer. Completion requires the terminal
+event, matching `result.json` hash/status/IDs, and exit zero. Partial and failed
+attempts exit 1. Published acquisitions are never overwritten; retries use a new
+directory and attempt ID. Temporary byte reuse applies only within an invocation;
+there is no cross-process download resume or automatic whole-episode fallback.
+An interrupted invocation without a valid terminal is incomplete.
+
+Current media-window support targets Windows and Linux amd64/arm64, static DASH
+SegmentTemplate timelines/durations and flat SegmentBase SIDX indexes. It supports
+progressive 8-bit H.264 4:2:0 video with four-byte NAL lengths and sufficient IDR
+boundaries. It extends through complete reference-picture groups and independently
+decodes the entire delivered clip with network protocols disabled. Open GOPs can
+be acquired only when an earlier IDR and sufficient trailing data fit the padding
+budget. Codec/configuration changes, unsupported codecs/HDR/interlacing, nested
+indexes, multi-entry/empty/rate-changing edits and unprovable timing/dependencies return typed
+errors. They are never repaired by transcoding. Compatible periods remain separate
+clips; known metadata stays explicit and unknown color/frame-rate fields are null.
+
+Install **FFmpeg and FFprobe**, including an H.264 decoder; test fixtures also
+require FFmpeg's `libx264` encoder. There are no new Go or Python package
+dependencies. Copy `contracts/media-windows-v1/schemas` with the Go source when
+building from a parent project: these schemas are embedded at compile time.
+Runtime limits include 1 MiB requests, 16 MiB metadata objects, 128 MiB individual
+segments, 512 MiB encoded media per coalesced acquisition span, 128 result clips,
+90-second media HTTP timeouts and a two-hour invocation limit. Unsupported cases
+fail explicitly. Capability reporting describes implemented acquisition support;
+CVA's new request/progress adapter and live service acceptance must be tested
+separately from the offline downloader fixtures.
+
+A Windows live acceptance test on 2026-11-18 acquired the first 60 seconds of
+an episode using the saved CVA session without browser renewal. The resulting
+1080p video-only clip contained 1,440 unchanged encoded samples over 60.06 seconds
+(including decoding padding). File/sample hashes, exact timing maps, JSON schemas,
+terminal status and full offline decoding passed; the test media was deleted.
+This does not establish live Docker authentication or every source format.
 
 ## CVA stored credentials
 

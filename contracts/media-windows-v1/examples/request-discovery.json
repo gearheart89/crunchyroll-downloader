@@ -1,0 +1,57 @@
+{
+  "schema": "cva.media-window-request",
+  "version": 1,
+  "request_id": "restore-discovery-0041",
+  "operation": "acquire_windows",
+  "source": {
+    "provider": "crunchyroll",
+    "watch_id": "EXAMPLE-EPISODE",
+    "presentation_id": "EXAMPLE-VERSION",
+    "presentation_locale": "en-US",
+    "expected_snapshot_id": null
+  },
+  "video": {
+    "selection": "highest",
+    "representation_id": null,
+    "allow_representation_substitution": false
+  },
+  "streams": {
+    "video": true,
+    "audio": false,
+    "subtitles": false
+  },
+  "windows": [
+    {
+      "window_id": "opening-discovery",
+      "anchor": "episode_start",
+      "start_seconds": "0/1",
+      "end_seconds": "300/1",
+      "context_before_seconds": "0/1",
+      "context_after_seconds": "0/1",
+      "boundary_policy": "clamp_to_episode"
+    },
+    {
+      "window_id": "ending-discovery",
+      "anchor": "episode_end",
+      "start_seconds": "-300/1",
+      "end_seconds": "0/1",
+      "context_before_seconds": "0/1",
+      "context_after_seconds": "0/1",
+      "boundary_policy": "clamp_to_episode"
+    }
+  ],
+  "delivery": {
+    "container": "mp4",
+    "self_contained": true,
+    "video_encoding": "forbidden",
+    "timestamp_policy": "rebase_with_exact_mapping",
+    "dependency_padding": "expand_to_decodable",
+    "max_dependency_padding_before_seconds": "30/1",
+    "max_dependency_padding_after_seconds": "30/1",
+    "allow_discontinuity_split": true
+  },
+  "output": {
+    "directory": "/work/restoration/acquisition/request-0041",
+    "overwrite": false
+  }
+}

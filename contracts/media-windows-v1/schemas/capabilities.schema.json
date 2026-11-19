@@ -1,0 +1,218 @@
+{
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "cva.downloader-capabilities"
+    },
+    "version": {
+      "const": 1
+    },
+    "downloader_version": {
+      "$ref": "#/$defs/label"
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "const": "acquire_windows"
+          },
+          "capability": {
+            "const": "media_windows_v1"
+          },
+          "request_versions": {
+            "type": "array",
+            "items": {
+              "const": 1
+            },
+            "minItems": 1,
+            "maxItems": 1
+          },
+          "result_versions": {
+            "type": "array",
+            "items": {
+              "const": 1
+            },
+            "minItems": 1,
+            "maxItems": 1
+          },
+          "sample_map_versions": {
+            "type": "array",
+            "items": {
+              "const": 1
+            },
+            "minItems": 1,
+            "maxItems": 1
+          },
+          "progress_versions": {
+            "type": "array",
+            "items": {
+              "const": 1
+            },
+            "minItems": 1,
+            "maxItems": 1
+          },
+          "delivery_formats": {
+            "type": "array",
+            "items": {
+              "const": "mp4"
+            },
+            "minItems": 1,
+            "maxItems": 1
+          },
+          "video_only": {
+            "const": true
+          },
+          "codec_configuration_changes": {
+            "const": "reject"
+          },
+          "boundary_policies": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "clamp_to_episode",
+                "require_requested_interval"
+              ]
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "name",
+          "capability",
+          "request_versions",
+          "result_versions",
+          "sample_map_versions",
+          "progress_versions",
+          "delivery_formats",
+          "video_only",
+          "codec_configuration_changes",
+          "boundary_policies"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 1
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "downloader_version",
+    "operations"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cva:downloader-capabilities:1",
+  "title": "Media-window capability query response",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "rational": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)/[1-9][0-9]*$"
+    },
+    "positiveRational": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*/[1-9][0-9]*$"
+    },
+    "nonnegativeRational": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)/[1-9][0-9]*$"
+    },
+    "integerTicks": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)$"
+    },
+    "nonnegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[\\\\:\\u0000-\\u001f\\u007f])[^/]+(?:/[^/]+)*$"
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$"
+    },
+    "interval": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rational"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "color": {
+      "type": "object",
+      "properties": {
+        "range": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "matrix": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "primaries": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transfer": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "range",
+        "matrix",
+        "primaries",
+        "transfer"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

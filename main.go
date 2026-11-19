@@ -10,6 +10,8 @@ import (
 )
 
 var (
+	capabilitiesJSON = flag.Bool("capabilities-json", false, "Print offline capabilities for media-window acquisition and exit")
+	requestJSON      = flag.String("request-json", "", "Acquire video-only windows from a CVA media-window request JSON file")
 	token            = ""
 	audioLang        = flag.String("audio-lang", "ja-JP", "Audio language(s), comma-separated (e.g. \"ja-JP,en-US\"). Add ALL for every available dub; explicit languages lead, the first available track is default, and ALL alone prefers ja-JP")
 	subtitlesLang    = flag.String("subs-lang", "en-US", "Subtitle language(s), comma-separated (e.g. \"fr-FR,ALL\"). Add ALL for every available subtitle; explicit languages lead, the first available track is default, and ALL alone prefers en-US")
@@ -160,6 +162,9 @@ func wantsJSON(args []string) bool {
 }
 
 func runCLI(args []string) (status int) {
+	if windowModeRequested(args) {
+		return runWindowCLI(args, os.Stdout)
+	}
 	return runCLIWith(args, runDownload)
 }
 

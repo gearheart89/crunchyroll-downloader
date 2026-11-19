@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -98,7 +99,11 @@ type CrunchyrollWidevineLicenseResponse struct {
 }
 
 func sendChallenge(contentId, videoToken string, challenge []byte) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodPost, "https://www.crunchyroll.com/license/v1/license/widevine", bytes.NewReader(challenge))
+	return sendChallengeContext(context.Background(), contentId, videoToken, challenge)
+}
+
+func sendChallengeContext(ctx context.Context, contentId, videoToken string, challenge []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://www.crunchyroll.com/license/v1/license/widevine", bytes.NewReader(challenge))
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +178,10 @@ func getWidevineDevice() (*widevine.Device, error) {
 }
 
 func getLicense(psshData, contentId, videoToken string) ([]*widevine.Key, error) {
+	return getLicenseContext(context.Background(), psshData, contentId, videoToken)
+}
+
+func getLicenseContext(ctx context.Context, psshData, contentId, videoToken string) ([]*widevine.Key, error) {
 	device, err := getWidevineDevice()
 	if device == nil {
 		return nil, errors.New("no widevine device provided. You either need:\n- a \".wvd\" file,\n- or \"client_id.bin\" and \"private_key.pem\" files.\nI'm not sharing links for obvious reasons, but search \"ready to use cdms\" on Google :)\n")
@@ -197,7 +206,7 @@ func getLicense(psshData, contentId, videoToken string) ([]*widevine.Key, error)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := sendChallenge(contentId, videoToken, challenge)
+	resp, err := sendChallengeContext(ctx, contentId, videoToken, challenge)
 	if err != nil {
 		return nil, err
 	}

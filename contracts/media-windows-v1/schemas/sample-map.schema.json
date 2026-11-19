@@ -1,0 +1,185 @@
+{
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "cva.media-sample-map"
+    },
+    "version": {
+      "const": 1
+    },
+    "clip_id": {
+      "$ref": "#/$defs/id"
+    },
+    "sample_index": {
+      "$ref": "#/$defs/nonnegativeInteger"
+    },
+    "clip_pts": {
+      "$ref": "#/$defs/integerTicks"
+    },
+    "clip_dts": {
+      "$ref": "#/$defs/integerTicks"
+    },
+    "clip_duration_ticks": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "source_pts": {
+      "$ref": "#/$defs/integerTicks"
+    },
+    "source_dts": {
+      "$ref": "#/$defs/integerTicks"
+    },
+    "source_duration_ticks": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "episode_time_seconds": {
+      "$ref": "#/$defs/rational"
+    },
+    "role": {
+      "enum": [
+        "requested_content",
+        "analysis_context",
+        "decode_dependency"
+      ]
+    },
+    "random_access": {
+      "type": "boolean"
+    },
+    "source_sample_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "clip_sample_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "clip_id",
+    "sample_index",
+    "clip_pts",
+    "clip_dts",
+    "clip_duration_ticks",
+    "source_pts",
+    "source_dts",
+    "source_duration_ticks",
+    "episode_time_seconds",
+    "role",
+    "random_access",
+    "source_sample_sha256",
+    "clip_sample_sha256"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cva:media-sample-map:1",
+  "title": "One JSONL encoded-sample mapping row",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "rational": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)/[1-9][0-9]*$"
+    },
+    "positiveRational": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*/[1-9][0-9]*$"
+    },
+    "nonnegativeRational": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)/[1-9][0-9]*$"
+    },
+    "integerTicks": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)$"
+    },
+    "nonnegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[\\\\:\\u0000-\\u001f\\u007f])[^/]+(?:/[^/]+)*$"
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$"
+    },
+    "interval": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rational"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "color": {
+      "type": "object",
+      "properties": {
+        "range": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "matrix": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "primaries": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transfer": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "range",
+        "matrix",
+        "primaries",
+        "transfer"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

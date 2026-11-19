@@ -1,0 +1,32 @@
+{
+  "schema": "cva.downloader-capabilities",
+  "version": 1,
+  "downloader_version": "EXAMPLE-BUILD",
+  "operations": [
+    {
+      "name": "acquire_windows",
+      "capability": "media_windows_v1",
+      "request_versions": [
+        1
+      ],
+      "result_versions": [
+        1
+      ],
+      "sample_map_versions": [
+        1
+      ],
+      "progress_versions": [
+        1
+      ],
+      "delivery_formats": [
+        "mp4"
+      ],
+      "video_only": true,
+      "codec_configuration_changes": "reject",
+      "boundary_policies": [
+        "clamp_to_episode",
+        "require_requested_interval"
+      ]
+    }
+  ]
+}

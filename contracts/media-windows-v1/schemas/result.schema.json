@@ -1,0 +1,716 @@
+{
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "cva.media-window-result"
+    },
+    "version": {
+      "const": 1
+    },
+    "request_id": {
+      "$ref": "#/$defs/id"
+    },
+    "attempt_id": {
+      "$ref": "#/$defs/id"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "failed"
+      ]
+    },
+    "acquired_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "downloader_version": {
+      "$ref": "#/$defs/label"
+    },
+    "source": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/source"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "representation": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/representation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "windows": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/windowResult"
+      },
+      "maxItems": 64
+    },
+    "clips": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/clip"
+      },
+      "maxItems": 128
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "enum": [
+              "invalid_request",
+              "unsupported_capability",
+              "authentication_failed",
+              "source_unavailable",
+              "source_changed",
+              "representation_unavailable",
+              "representation_changed",
+              "rate_limited",
+              "network_failed",
+              "dependency_expansion_exceeds_limit",
+              "dependency_information_unavailable",
+              "discontinuity_requires_split",
+              "coverage_incomplete",
+              "decode_validation_failed",
+              "timestamp_mapping_unavailable",
+              "output_validation_failed",
+              "output_configuration_failed",
+              "cancelled",
+              "timeout",
+              "internal_error",
+              "codec_configuration_changed"
+            ]
+          },
+          "window_id": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          }
+        },
+        "required": [
+          "code",
+          "window_id",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 128
+    }
+  },
+  "required": [
+    "schema",
+    "version",
+    "request_id",
+    "attempt_id",
+    "status",
+    "acquired_at",
+    "downloader_version",
+    "source",
+    "representation",
+    "windows",
+    "clips",
+    "errors"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "completed",
+              "partial"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source": {
+            "$ref": "#/$defs/source"
+          },
+          "representation": {
+            "$ref": "#/$defs/representation"
+          },
+          "windows": {
+            "minItems": 1
+          },
+          "clips": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "completed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "errors": {
+            "maxItems": 0
+          },
+          "windows": {
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/windowResult"
+                },
+                {
+                  "properties": {
+                    "status": {
+                      "const": "completed"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "clips": {
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/clip"
+                },
+                {
+                  "properties": {
+                    "validation": {
+                      "properties": {
+                        "requested_coverage_complete": {
+                          "const": true
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "errors": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "failed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "clips": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cva:media-window-result:1",
+  "title": "CVA media window result v1",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "rational": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)/[1-9][0-9]*$"
+    },
+    "positiveRational": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*/[1-9][0-9]*$"
+    },
+    "nonnegativeRational": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)/[1-9][0-9]*$"
+    },
+    "integerTicks": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)$"
+    },
+    "nonnegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[\\\\:\\u0000-\\u001f\\u007f])[^/]+(?:/[^/]+)*$"
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$"
+    },
+    "interval": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rational"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "color": {
+      "type": "object",
+      "properties": {
+        "range": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "matrix": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "primaries": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transfer": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "range",
+        "matrix",
+        "primaries",
+        "transfer"
+      ],
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "const": "crunchyroll"
+        },
+        "watch_id": {
+          "$ref": "#/$defs/id"
+        },
+        "presentation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "presentation_locale": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/locale"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider_revision": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/id"
+        },
+        "episode_duration_seconds": {
+          "$ref": "#/$defs/positiveRational"
+        }
+      },
+      "required": [
+        "provider",
+        "watch_id",
+        "presentation_id",
+        "presentation_locale",
+        "provider_revision",
+        "snapshot_id",
+        "episode_duration_seconds"
+      ],
+      "additionalProperties": false
+    },
+    "representation": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "codec": {
+          "$ref": "#/$defs/label"
+        },
+        "codec_tag": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profile": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "level": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "codec_configuration_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pixel_format": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bit_depth": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sample_aspect_ratio": {
+          "$ref": "#/$defs/positiveRational"
+        },
+        "average_frame_rate": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/positiveRational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "$ref": "#/$defs/color"
+        }
+      },
+      "required": [
+        "id",
+        "codec",
+        "codec_tag",
+        "profile",
+        "level",
+        "codec_configuration_sha256",
+        "width",
+        "height",
+        "pixel_format",
+        "bit_depth",
+        "sample_aspect_ratio",
+        "average_frame_rate",
+        "color"
+      ],
+      "additionalProperties": false
+    },
+    "windowResult": {
+      "type": "object",
+      "properties": {
+        "window_id": {
+          "$ref": "#/$defs/id"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "partial",
+            "failed"
+          ]
+        },
+        "resolved_requested_seconds": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/interval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolved_context_seconds": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/interval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clip_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/id"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "window_id",
+        "status",
+        "resolved_requested_seconds",
+        "resolved_context_seconds",
+        "clip_ids"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "resolved_requested_seconds": {
+                "$ref": "#/$defs/interval"
+              },
+              "resolved_context_seconds": {
+                "$ref": "#/$defs/interval"
+              },
+              "clip_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "clip": {
+      "type": "object",
+      "properties": {
+        "clip_id": {
+          "$ref": "#/$defs/id"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "stream_index": {
+          "const": 0
+        },
+        "source_period_id": {
+          "$ref": "#/$defs/id"
+        },
+        "discontinuity_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_time_base": {
+          "$ref": "#/$defs/positiveRational"
+        },
+        "clip_time_base": {
+          "$ref": "#/$defs/positiveRational"
+        },
+        "delivered_episode_seconds": {
+          "$ref": "#/$defs/interval"
+        },
+        "timeline": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "schema": {
+              "const": "cva.media-sample-map"
+            },
+            "version": {
+              "const": 1
+            }
+          },
+          "required": [
+            "path",
+            "sha256",
+            "schema",
+            "version"
+          ],
+          "additionalProperties": false
+        },
+        "assembly": {
+          "type": "object",
+          "properties": {
+            "video_reencoded": {
+              "const": false
+            },
+            "bitstream_filters": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/label"
+              }
+            }
+          },
+          "required": [
+            "video_reencoded",
+            "bitstream_filters"
+          ],
+          "additionalProperties": false
+        },
+        "validation": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "const": "probe_and_boundary_decode"
+            },
+            "self_contained": {
+              "const": true
+            },
+            "decode_dependencies_complete": {
+              "const": true
+            },
+            "requested_coverage_complete": {
+              "type": "boolean"
+            },
+            "discontinuities": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/id"
+              },
+              "maxItems": 0
+            }
+          },
+          "required": [
+            "level",
+            "self_contained",
+            "decode_dependencies_complete",
+            "requested_coverage_complete",
+            "discontinuities"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "clip_id",
+        "path",
+        "bytes",
+        "sha256",
+        "stream_index",
+        "source_period_id",
+        "discontinuity_id",
+        "source_time_base",
+        "clip_time_base",
+        "delivered_episode_seconds",
+        "timeline",
+        "assembly",
+        "validation"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

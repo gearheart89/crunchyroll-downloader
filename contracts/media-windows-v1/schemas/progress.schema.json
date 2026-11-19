@@ -1,0 +1,474 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cva:media-window-progress:1",
+  "title": "One media-window progress JSONL event",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "rational": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)/[1-9][0-9]*$"
+    },
+    "positiveRational": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*/[1-9][0-9]*$"
+    },
+    "nonnegativeRational": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)/[1-9][0-9]*$"
+    },
+    "integerTicks": {
+      "type": "string",
+      "pattern": "^-?(?:0|[1-9][0-9]*)$"
+    },
+    "nonnegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*[\\\\:\\u0000-\\u001f\\u007f])[^/]+(?:/[^/]+)*$"
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$"
+    },
+    "interval": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rational"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "color": {
+      "type": "object",
+      "properties": {
+        "range": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "matrix": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "primaries": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transfer": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "range",
+        "matrix",
+        "primaries",
+        "transfer"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "const": "cva-media-window-progress"
+        },
+        "version": {
+          "const": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event": {
+          "const": "phase"
+        },
+        "phase": {
+          "enum": [
+            "initializing",
+            "authenticating",
+            "resolving",
+            "downloading",
+            "assembling",
+            "validating",
+            "publishing"
+          ]
+        }
+      },
+      "required": [
+        "protocol",
+        "version",
+        "sequence",
+        "request_id",
+        "attempt_id",
+        "event",
+        "phase"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "const": "cva-media-window-progress"
+        },
+        "version": {
+          "const": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event": {
+          "const": "window_progress"
+        },
+        "window_id": {
+          "$ref": "#/$defs/id"
+        },
+        "unit": {
+          "const": "segments"
+        },
+        "units_completed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "units_total": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "percent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "protocol",
+        "version",
+        "sequence",
+        "request_id",
+        "attempt_id",
+        "event",
+        "window_id",
+        "unit",
+        "units_completed",
+        "units_total",
+        "percent"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "const": "cva-media-window-progress"
+        },
+        "version": {
+          "const": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event": {
+          "const": "warning"
+        },
+        "code": {
+          "enum": [
+            "nonfatal_network_warning",
+            "nonfatal_output_warning"
+          ]
+        },
+        "message": {
+          "$ref": "#/$defs/label"
+        }
+      },
+      "required": [
+        "protocol",
+        "version",
+        "sequence",
+        "request_id",
+        "attempt_id",
+        "event",
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "const": "cva-media-window-progress"
+        },
+        "version": {
+          "const": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event": {
+          "const": "terminal"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "partial",
+            "failed"
+          ]
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "const": "result.json"
+                },
+                "sha256": {
+                  "$ref": "#/$defs/sha256"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_code": {
+          "oneOf": [
+            {
+              "enum": [
+                "invalid_request",
+                "unsupported_capability",
+                "authentication_failed",
+                "source_unavailable",
+                "source_changed",
+                "representation_unavailable",
+                "representation_changed",
+                "rate_limited",
+                "network_failed",
+                "dependency_expansion_exceeds_limit",
+                "dependency_information_unavailable",
+                "discontinuity_requires_split",
+                "coverage_incomplete",
+                "decode_validation_failed",
+                "timestamp_mapping_unavailable",
+                "output_validation_failed",
+                "output_configuration_failed",
+                "cancelled",
+                "timeout",
+                "internal_error",
+                "codec_configuration_changed"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "$ref": "#/$defs/label"
+        }
+      },
+      "required": [
+        "protocol",
+        "version",
+        "sequence",
+        "request_id",
+        "attempt_id",
+        "event",
+        "status",
+        "result",
+        "error_code",
+        "message"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "completed",
+                  "partial"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "request_id": {
+                "$ref": "#/$defs/id"
+              },
+              "result": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "const": "result.json"
+                  },
+                  "sha256": {
+                    "$ref": "#/$defs/sha256"
+                  }
+                },
+                "required": [
+                  "path",
+                  "sha256"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error_code": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "error_code": {
+                "enum": [
+                  "invalid_request",
+                  "unsupported_capability",
+                  "authentication_failed",
+                  "source_unavailable",
+                  "source_changed",
+                  "representation_unavailable",
+                  "representation_changed",
+                  "rate_limited",
+                  "network_failed",
+                  "dependency_expansion_exceeds_limit",
+                  "dependency_information_unavailable",
+                  "discontinuity_requires_split",
+                  "coverage_incomplete",
+                  "decode_validation_failed",
+                  "timestamp_mapping_unavailable",
+                  "output_validation_failed",
+                  "output_configuration_failed",
+                  "cancelled",
+                  "timeout",
+                  "internal_error",
+                  "codec_configuration_changed"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "request_id": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              },
+              "result": {
+                "type": "null"
+              },
+              "error_code": {
+                "const": "invalid_request"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
