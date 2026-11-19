@@ -1,5 +1,18 @@
 # Changelog
 
+## cva/v1.6.0-4 (2026-11-18)
+
+- Correct media-window output on Debian FFmpeg/FFprobe 7.1.5: construct flat MP4
+  STTS/CTTS/sample tables directly from native source samples, preserving the
+  terminal duration instead of passing it through FFmpeg's remux estimates.
+- Validate bounded native MP4 timing tables, exact source durations, independent
+  probe PTS/DTS, packet hashes and decoded frame counts. Preserve the original
+  source timestamps and payloads; no duration tolerance is added.
+- Add CVA's 10 MHz clock reproduction, malformed-table and changed-terminal
+  regressions, 64-bit duration-header coverage, and a Debian media-test CI job.
+- Update the CVA handoff with the v3 blocker and v4 timing correction. Live
+  Debian Docker acceptance remains a separate required check.
+
 ## cva/v1.6.0-3 (2026-11-18)
 
 - Add revision 2 of CVA's media-window v1 acquisition contract, an offline

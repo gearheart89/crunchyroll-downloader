@@ -325,55 +325,14 @@ func wmSampleExtent(samples []wmSample, scale int64) (*big.Rat, *big.Rat) {
 }
 
 func writeWindowClip(ctx context.Context, v *wmVideo, samples []wmSample, destination, clipID string, requested, contexts []wmInterval) (map[string]any, error) {
-	// Reconstruct only container structures. FullSample.Data and composition
-	// offsets are copied verbatim; there is no video encoder in this path.
-	var initBytes bytes.Buffer
-	if e := v.Init.Encode(&initBytes); e != nil {
+	if e := writeWindowMP4(ctx, v, samples, destination); e != nil {
 		return nil, e
 	}
-	clone, e := mp4.DecodeFile(bytes.NewReader(initBytes.Bytes()))
-	if e != nil {
-		return nil, e
-	}
-	init := clone.Init
-	track := init.Moov.Traks[0]
-	children := []mp4.Box{}
-	for _, b := range track.Children {
-		if b.Type() != "edts" {
-			children = append(children, b)
-		}
-	}
-	track.Children = children
-	track.Edts = nil
 	base := samples[0].DecodeTime
-	last := samples[len(samples)-1]
-	duration := last.DecodeTime + uint64(last.Dur) - base
-	track.Mdia.Mdhd.Duration = duration
-	init.Moov.Mvhd.Duration = 0
-	track.Tkhd.Duration = 0
-	f, e := os.CreateTemp(filepath.Dir(destination), ".window-fragments-*.mp4")
-	if e != nil {
-		return nil, wf("output_configuration_failed")
-	}
-	defer f.Close()
-	defer os.Remove(f.Name())
-	if e = init.Encode(f); e != nil {
-		return nil, e
-	}
 	rows := []map[string]any{}
 	for i, s := range samples {
 		if ctx.Err() != nil {
 			return nil, wf("cancelled")
-		}
-		frag, e := mp4.CreateFragment(uint32(i+1), track.Tkhd.TrackID)
-		if e != nil {
-			return nil, e
-		}
-		copySample := s.FullSample
-		copySample.DecodeTime -= base
-		frag.AddFullSample(copySample)
-		if e = frag.Encode(f); e != nil {
-			return nil, e
 		}
 		interval := wmInterval{s.Episode, add(s.Episode, ticks(int64(s.Dur), v.Scale))}
 		role := "decode_dependency"
@@ -388,24 +347,8 @@ func writeWindowClip(ctx context.Context, v *wmVideo, samples []wmSample, destin
 			}
 		}
 		hash := windowHash(s.Data)
-		row := map[string]any{"schema": "cva.media-sample-map", "version": 1, "clip_id": clipID, "sample_index": i, "clip_pts": strconv.FormatInt(s.PTS-int64(base), 10), "clip_dts": strconv.FormatUint(copySample.DecodeTime, 10), "clip_duration_ticks": strconv.FormatUint(uint64(s.Dur), 10), "source_pts": strconv.FormatInt(s.PTS, 10), "source_dts": strconv.FormatUint(s.DecodeTime, 10), "source_duration_ticks": strconv.FormatUint(uint64(s.Dur), 10), "episode_time_seconds": rs(s.Episode), "role": role, "random_access": s.IDR, "source_sample_sha256": hash, "clip_sample_sha256": hash}
+		row := map[string]any{"schema": "cva.media-sample-map", "version": 1, "clip_id": clipID, "sample_index": i, "clip_pts": strconv.FormatInt(s.PTS-int64(base), 10), "clip_dts": strconv.FormatUint(s.DecodeTime-base, 10), "clip_duration_ticks": strconv.FormatUint(uint64(s.Dur), 10), "source_pts": strconv.FormatInt(s.PTS, 10), "source_dts": strconv.FormatUint(s.DecodeTime, 10), "source_duration_ticks": strconv.FormatUint(uint64(s.Dur), 10), "episode_time_seconds": rs(s.Episode), "role": role, "random_access": s.IDR, "source_sample_sha256": hash, "clip_sample_sha256": hash}
 		rows = append(rows, row)
-	}
-	if e = f.Sync(); e != nil {
-		return nil, e
-	}
-	if e = f.Close(); e != nil {
-		return nil, e
-	}
-	ffmpeg, e := findFFmpeg()
-	if e != nil {
-		return nil, wf("unsupported_capability")
-	}
-	// Produce an ordinary MP4 sample table. In particular, negative CTS in
-	// fragmented MP4 has differing demuxer interpretations across FFmpeg versions.
-	// Measure and bind the final packet clock instead of assuming a seek offset.
-	if _, e = windowCommand(ctx, ffmpeg, "-nostdin", "-v", "error", "-n", "-copyts", "-protocol_whitelist", "file", "-i", f.Name(), "-map", "0:v:0", "-c:v", "copy", "-an", "-sn", "-dn", "-map_metadata", "-1", "-video_track_timescale", strconv.FormatInt(v.Scale, 10), "-avoid_negative_ts", "disabled", "-movflags", "+faststart", destination); e != nil {
-		return nil, e
 	}
 	properties, packets, e := validateWindowClip(ctx, destination, v, samples)
 	if e != nil {
@@ -468,6 +411,7 @@ type wmProbeStream struct {
 	Transfer   string `json:"color_transfer"`
 	Primaries  string `json:"color_primaries"`
 	ConfigHash string `json:"extradata_hash"`
+	ReadFrames string `json:"nb_read_frames"`
 }
 type wmLimitedOutput struct {
 	bytes.Buffer
@@ -499,7 +443,7 @@ func validateWindowClip(ctx context.Context, path string, v *wmVideo, samples []
 	if e != nil {
 		return nil, nil, e
 	}
-	b, e := windowCommand(ctx, probe, "-v", "error", "-protocol_whitelist", "file", "-show_streams", "-show_packets", "-show_data_hash", "sha256", "-of", "json", path)
+	b, e := windowCommand(ctx, probe, "-v", "error", "-protocol_whitelist", "file", "-count_frames", "-show_streams", "-show_packets", "-show_data_hash", "sha256", "-of", "json", path)
 	if e != nil {
 		return nil, nil, e
 	}
@@ -511,8 +455,13 @@ func validateWindowClip(ctx context.Context, path string, v *wmVideo, samples []
 		return nil, nil, wf("output_validation_failed")
 	}
 	s := p.Streams[0]
-	if s.TimeBase != rs(ticks(1, v.Scale)) || s.Width != int(v.Entry.Width) || s.Height != int(v.Entry.Height) || !strings.EqualFold(s.ConfigHash, "SHA256:"+v.Config) {
+	frameCount, e := strconv.Atoi(s.ReadFrames)
+	if e != nil || frameCount != len(samples) || s.TimeBase != rs(ticks(1, v.Scale)) || s.Width != int(v.Entry.Width) || s.Height != int(v.Entry.Height) || !strings.EqualFold(s.ConfigHash, "SHA256:"+v.Config) {
 		return nil, nil, wf("output_validation_failed")
+	}
+	native, e := readWindowTiming(path, len(samples), v.Scale)
+	if e != nil {
+		return nil, nil, e
 	}
 	ptsShift := sub(big.NewRat(p.Packets[0].PTS, 1), big.NewRat(samples[0].PTS, 1))
 	dtsShift := sub(big.NewRat(p.Packets[0].DTS, 1), new(big.Rat).SetInt(new(big.Int).SetUint64(samples[0].DecodeTime)))
@@ -520,9 +469,12 @@ func validateWindowClip(ctx context.Context, path string, v *wmVideo, samples []
 		source := samples[i]
 		ps := sub(big.NewRat(packet.PTS, 1), big.NewRat(source.PTS, 1))
 		ds := sub(big.NewRat(packet.DTS, 1), new(big.Rat).SetInt(new(big.Int).SetUint64(source.DecodeTime)))
-		if ps.Cmp(ptsShift) != 0 || ds.Cmp(dtsShift) != 0 || packet.Duration != int64(source.Dur) || !strings.EqualFold(packet.Hash, "SHA256:"+windowHash(source.Data)) {
+		if ps.Cmp(ptsShift) != 0 || ds.Cmp(dtsShift) != 0 || native[i].Duration != int64(source.Dur) || packet.PTS != native[i].PTS || packet.DTS != native[i].DTS || !strings.EqualFold(packet.Hash, "SHA256:"+windowHash(source.Data)) {
 			return nil, nil, wf("output_validation_failed")
 		}
+		// Use the exact final STTS value in the receipt, never the codec parser's
+		// nominal duration estimate (which varies across FFprobe releases).
+		p.Packets[i].Duration = native[i].Duration
 	}
 	// Decode the entire selected window offline. This is stronger than the
 	// contract's minimum boundary check, and bounds are small donor windows.

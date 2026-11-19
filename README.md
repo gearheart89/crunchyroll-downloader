@@ -11,15 +11,21 @@ Downloads anime from Crunchyroll and outputs them in an MKV or MP4 file.
 This fork starts from upstream **1.6.0** (`182ea1b`) and reads the account/password
 already stored by **Crunchyroll Video Analyzer (CVA)** through its platform-aware
 credential store. Windows browser sign-in uses those stored credentials. Use
-the fork release **`cva/v1.6.0-3`** or build its tagged source for all current features;
+the fork release **`cva/v1.6.0-4`** or its tagged source for the published fork features;
 upstream releases do not contain these customizations.
 
 For future upstream reviews, customization requirements, validation, and parent
 project handoff, see the [fork maintenance guide](MAINTENANCE.md).
 
-## Video-only media windows (`cva/v1.6.0-3`)
+## Video-only media windows (`cva/v1.6.0-4`)
 
-The working source adds CVA's **media-window v1, handoff revision 2** interface.
+**Timing correction in `cva/v1.6.0-4`:** CVA found a Debian FFmpeg 7.1.5
+duration-validation/remux failure in `cva/v1.6.0-3`. The corrected release writes
+exact flat-MP4 timing tables directly and validates their native durations.
+Windows and Debian-runtime offline tests passed; live Docker integration still
+needs qualification. See the [integration handoff](CVA_MEDIA_WINDOWS_HANDOFF.md).
+
+The downloader implements CVA's **media-window v1, handoff revision 2** interface.
 It acquires selected portions of one exact episode presentation as video-only
 MP4 clips, without re-encoding. CVA supplies the selection and handles alignment,
 masks, review and compositing. This feature is not in `cva/v1.6.0-2`.
@@ -80,10 +86,13 @@ tick of integer rounding when pictures are reordered. It requires contiguous
 encoded samples, preserves all timestamps, and never extends outer coverage.
 
 Encoded sample hashes cover **decrypted, length-prefixed compressed video sample
-bytes**, not encrypted network bytes. Every delivered packet's payload, duration
-and relative PTS/DTS are checked against those source samples. Container clocks
-can acquire constant presentation/decode shifts during remuxing; the measured
-final clocks are recorded per sample. Codec configuration hashes cover the AVC
+bytes**, not encrypted network bytes. Every delivered packet's payload, native
+STTS duration and relative PTS/DTS are checked against those source samples.
+The source writes flat MP4 sample tables without an FFmpeg remux. Decode times
+are rebased, and a single source-derived composition shift makes CTTS offsets
+nonnegative; both final clocks are independently checked and recorded per sample.
+FFprobe's packet-duration estimate is not used as timing-table authority.
+Codec configuration hashes cover the AVC
 decoder configuration record (the `avcC` payload without its box header).
 Snapshot IDs hash source/presentation identity, selected representation,
 initialization bytes, period/timeline mapping and segment index layout, excluding

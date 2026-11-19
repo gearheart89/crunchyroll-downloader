@@ -1,6 +1,76 @@
 # CVA integration handoff: media-window acquisition v1
 
-Date: 2026-11-18. Fork release/tag: **`cva/v1.6.0-3`**.
+Date: 2026-11-18. Fork release/tag: **`cva/v1.6.0-4`**.
+
+## Timing correction in v4
+
+CVA's Debian acceptance report identified a blocker in the released v3 build.
+The report and synthetic probe are at
+`C:\CODEX\Crunchyroll Video Analyzer\docs\investigations\MEDIA_WINDOWS_V3_LINUX.md`
+and `clock_probe_test.go`. The confirmed live result was
+`failed / output_validation_failed` after all 23 planned fetches. Its rejected
+MP4 was already deleted, so the exact live failing comparison is still unknown.
+The offline findings establish two separate issues: FFprobe 7.1.5 can report a
+nominal packet duration instead of the actual STTS value, and the FFmpeg remux
+can change the final sample's actual STTS duration by one tick.
+
+The v4 correction changes assembly and validation together:
+
+- `windows_mp4.go` directly writes a single-track flat MP4 from the original
+  encoded samples. STTS retains every native source duration, including the last
+  sample. Sample sizes, chunk offsets and random-access tables describe those
+  same bytes. Movie/track/media duration headers use 64-bit fields.
+- DTS is rebased from the first selected source DTS. One constant composition
+  shift derived from the minimum source CTS offset makes CTTS nonnegative.
+  This is exact container-clock rebasing, not frame-rate conversion. Source
+  PTS/DTS and original episode mappings remain unchanged in the sidecar.
+- An independent bounded reader checks the finished file's STTS/CTTS, media
+  clock/duration and sample count. FFprobe must agree on PTS/DTS, packet count,
+  codec configuration and sample hashes. Exact native STTS durations go into
+  `clip_duration_ticks`; nominal FFprobe `packet.duration` is not authoritative.
+- Every native output duration must equal its source duration, including the
+  terminal sample. Full offline decoding and decoded frame-count checks remain
+  mandatory. A deliberately shortened terminal sample is rejected. No general
+  synchronization/duration tolerance or altered fixture expectation was added.
+
+The request/result/progress/sample-map schemas and invocation flags are unchanged.
+The v3 release assets and tag do **not** contain this correction. Pin v4 for the
+corrected implementation; the v3 tag remains unchanged. CVA's independent STTS
+measurement correction remains necessary and complementary. Publication alone
+does not establish live Docker acceptance.
+
+Offline qualification results for this correction:
+
+- Windows x64, FFmpeg/FFprobe 8.0.1: the full `go test ./...` suite and `go vet
+  ./...` passed with required media tools enabled.
+- Linux x64 via WSL, using isolated official Debian FFmpeg/FFprobe packages and
+  libraries at **`7:7.1.5-0+deb13u1`**: all 30 top-level tests selected by
+  `TestWindow|TestCVAClockProbe` passed, with no failures or skips. This used the
+  Debian runtime directly; it was not a Docker-container integration run.
+- The pristine v3 production code plus the supplied synthetic probe reproduced
+  both the 10 MHz clock failure and existing VFR test failure under that same
+  Debian runtime. The corrected probe preserves all 288 actual source STTS
+  durations, including the terminal sample's 416667 ticks.
+- Regressions cover malformed timing tables, exact rejection of a one-tick
+  terminal-duration alteration, 64-bit duration headers, VFR, B frames, source
+  origins, edit mapping, encrypted fixtures and existing window behavior.
+- A Debian Trixie CI job runs this media suite using native Debian packages,
+  alongside the existing race tests, vet/format checks and platform build matrix.
+
+Use the v4 release assets and their adjacent `.sha256` files for integration.
+The earlier local `-modified` candidates are superseded; their hashes do not
+identify the tagged release. Windows x64 and Linux x64 offline capability checks
+passed on the corrected development builds. Linux ARM64 was cross-compiled only;
+native qualification is pending. Existing request flags, schemas and
+source/episode mappings remain unchanged. Point CVA's configurable executable
+path at the verified v4 asset, then repeat the reported one-minute live acceptance
+using CVA's independent native-STTS measurements. No parent files were replaced.
+
+Live Docker acquisition, expired-session renewal and CVA's end-to-end consumer
+acceptance still require separate qualification; no production container is
+changed by the downloader's offline investigation.
+
+## Integration interface (introduced in v3, corrected in v4)
 
 The downloader side of CVA's 2026-11-18 **revision 2** media-window contract is
 implemented. Wire versions remain 1. A live Windows acquisition passed; CVA's
@@ -12,10 +82,11 @@ for the CVA conversation; it does not claim those consumer changes are complete.
 
 Repository: <https://github.com/gearheart89/crunchyroll-downloader>
 
-Release: <https://github.com/gearheart89/crunchyroll-downloader/releases/tag/cva/v1.6.0-3>
+Release: <https://github.com/gearheart89/crunchyroll-downloader/releases/tag/cva/v1.6.0-4>
 
-Pin this release rather than upstream `1.6.0`, fork `cva/v1.6.0-2`, or a moving
-branch. Older releases lack this media-window interface.
+Pin this release for the corrected media-window implementation. v3 introduced
+the interface but has the Debian timing blocker described above. Earlier fork
+releases and upstream `1.6.0` lack the interface.
 
 | Runtime | Release asset | Suggested installed filename |
 | --- | --- | --- |
@@ -44,8 +115,8 @@ Do not assume the downloader's location determines its working directory.
 For a source-build profile, fetch the fork tag and build from its source root:
 
 ```sh
-git fetch origin tag cva/v1.6.0-3
-git checkout --detach cva/v1.6.0-3
+git fetch origin tag cva/v1.6.0-4
+git checkout --detach cva/v1.6.0-4
 go build -trimpath -ldflags="-s -w" -o <configured-destination> .
 ```
 
@@ -288,8 +359,10 @@ selected original presentation. Never assume the clip starts at episode zero,
 that source and clip clocks are identical, or that frame index implies time.
 
 Raw source PTS/DTS are retained. Single normal-speed edit-list offsets are
-applied before DASH period/PTO mapping. Final clip PTS/DTS are measured after
-remuxing; constant shifts can occur and are recorded rather than guessed.
+applied before DASH period/PTO mapping. Final clip PTS/DTS are checked against
+the finished MP4 timing tables and an independent probe; constant shifts are
+recorded rather than guessed. Use native STTS durations for exact comparisons,
+particularly with FFprobe versions that report nominal codec-rate estimates.
 Internal coverage checking permits one source-clock tick of rounding where
 reordered pictures meet, requires continuous decode samples, and does not alter
 timestamps, extend outer coverage, or bridge larger gaps.
@@ -374,5 +447,7 @@ Unsupported cases return typed errors: other codecs/HDR/interlacing, nested
 indexes, complex edits, unprovable dependencies, and representation/configuration
 changes. Limits include 1 MiB requests, 16 MiB manifest metadata, 128 MiB per
 segment, 512 MiB per coalesced encoded span, 128 groups/clips, 90-second media
-HTTP timeouts and a two-hour invocation limit. A capability advertises an
-implemented operation, not universal source compatibility or accepted rendering.
+HTTP timeouts and a two-hour invocation limit. The corrected flat writer also
+bounds each clip at 1,048,576 samples and 16 MiB of MP4 metadata. A capability
+advertises an implemented operation, not universal source compatibility or
+accepted rendering.

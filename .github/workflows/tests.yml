@@ -39,6 +39,26 @@ jobs:
           CRDL_REQUIRE_MEDIA_TOOLS: '1'
         run: go test -race -count=2 -timeout 5m ./...
 
+  debian-media:
+    name: Debian media-window acceptance
+    runs-on: ubuntu-latest
+    container: debian:trixie-slim
+    steps:
+      - name: Install native Debian media tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git ffmpeg python3
+          ffmpeg -version
+          ffprobe -version
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Verify exact sample timing and media-window behavior
+        env:
+          CRDL_REQUIRE_MEDIA_TOOLS: '1'
+        run: go test -run 'TestWindow|TestCVAClockProbe' -count=1 -timeout 5m ./...
+
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
